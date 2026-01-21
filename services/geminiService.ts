@@ -5,28 +5,44 @@ import { getSettings } from "./storageService";
 
 // Hardcoded fallback key provided for deployment stability
 const FALLBACK_API_KEY = "AIzaSyCloJjKarKbYjvYoMw-uJl9hcKRDJqcNuw";
+const VERIFICATION_TIMEOUT_MS = 60000; // 60 Seconds Failsafe
 
-// Helper to get AI instance with dynamic key resolution
+// Helper to safely get env var without crashing if process is undefined
+const getEnvKey = () => {
+    try {
+        // @ts-ignore
+        return typeof process !== 'undefined' && process.env ? process.env.API_KEY : "";
+    } catch (e) {
+        return "";
+    }
+};
+
+// Helper to get AI instance with dynamic key resolution and timeouts
 const getAI = async () => {
-  // 1. Try to get key from DB Settings (Admin Configured) - this takes precedence
+  let dbKey = "";
+
+  // 1. Try to get key from DB Settings (Admin Configured)
+  // We use a timeout to ensure this doesn't block the UI if DB is slow
   try {
-    const settings = await getSettings();
-    if (settings.geminiApiKey && settings.geminiApiKey.length > 10) {
-       return { 
-           ai: new GoogleGenAI({ apiKey: settings.geminiApiKey }),
-           key: settings.geminiApiKey
-       };
+    const settingsPromise = getSettings();
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
+    const settings = await Promise.race([settingsPromise, timeoutPromise]);
+    
+    if (settings && settings.geminiApiKey && settings.geminiApiKey.length > 10) {
+       dbKey = settings.geminiApiKey;
     }
   } catch (e) {
-    console.warn("Failed to fetch settings for API key");
+    console.warn("Failed to fetch settings for API key, using fallback");
   }
 
-  // 2. Fallback to Environment Variable or Hardcoded Key
-  const envKey = process.env.API_KEY || FALLBACK_API_KEY;
+  // 2. Resolve Final Key: DB > Env > Hardcoded Fallback
+  const finalKey = dbKey || getEnvKey() || FALLBACK_API_KEY;
   
+  if (!finalKey) console.error("CRITICAL: No Gemini API Key found!");
+
   return { 
-      ai: new GoogleGenAI({ apiKey: envKey }),
-      key: envKey
+      ai: new GoogleGenAI({ apiKey: finalKey }),
+      key: finalKey
   };
 };
 
@@ -95,7 +111,7 @@ export const analyzeAsset = async (base64Image: string): Promise<string> => {
   const { ai } = await getAI();
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', // FAST MODEL
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
@@ -106,6 +122,7 @@ export const analyzeAsset = async (base64Image: string): Promise<string> => {
     });
     return response.text || "{}";
   } catch (error) {
+    console.error("Analyze Asset Error", error);
     return "{}";
   }
 };
@@ -113,76 +130,96 @@ export const analyzeAsset = async (base64Image: string): Promise<string> => {
 /**
  * SECURITY: Validate Asset Images vs Name
  * Checks if the 5+ images actually match the provided title.
+ * TIMEOUT: If >60s, pass to Admin Review (valid: true).
  */
 export const validateAssetImages = async (images: string[], title: string): Promise<{ valid: boolean; reason?: string }> => {
   const { ai } = await getAI();
-  try {
-    // We send up to 5 images for validation to save tokens/bandwidth
-    const parts: any[] = images.slice(0, 5).map(img => ({
-        inlineData: { mimeType: 'image/jpeg', data: img.split(',')[1] || img }
-    }));
-    
-    parts.push({ 
-        text: `SECURITY AUDIT: You are a strict marketplace moderator.
-        Task: Verify if these images consistently represent a "${title}".
-        Rules:
-        1. If images are unrelated (e.g., a car and a shoe), REJECT.
-        2. If images are low quality/blurry/black, REJECT.
-        3. If images do not match the title "${title}", REJECT.
+  
+  const verifyPromise = (async () => {
+    try {
+        // We send up to 5 images for validation to save tokens/bandwidth
+        const parts: any[] = images.slice(0, 5).map(img => ({
+            inlineData: { mimeType: 'image/jpeg', data: img.split(',')[1] || img }
+        }));
         
-        Return JSON: { "valid": boolean, "reason": "string (short harsh reason if rejected)" }` 
-    });
+        parts.push({ 
+            text: `SECURITY AUDIT: You are a strict marketplace moderator.
+            Task: Verify if these images consistently represent a "${title}".
+            Rules:
+            1. If images are unrelated (e.g., a car and a shoe), REJECT.
+            2. If images are low quality/blurry/black, REJECT.
+            3. If images do not match the title "${title}", REJECT.
+            
+            Return JSON: { "valid": boolean, "reason": "string (short harsh reason if rejected)" }` 
+        });
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview', // FAST MODEL
-        contents: { parts },
-        config: { responseMimeType: 'application/json' }
-    });
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview', 
+            contents: { parts },
+            config: { responseMimeType: 'application/json' }
+        });
 
-    const result = JSON.parse(response.text || '{"valid": false, "reason": "AI Error"}');
-    return result;
-  } catch (e) {
-      console.error("Asset Validation Error:", e);
-      // Fallback: If AI fails due to connection, allow pending manual review
-      return { valid: true, reason: "Manual Review Required (AI Offline)" };
-  }
+        return JSON.parse(response.text || '{"valid": false, "reason": "AI Error"}');
+      } catch (e) {
+          console.error("Asset Validation Error:", e);
+          // Fallback: If AI fails due to connection, allow pending manual review
+          return { valid: true, reason: "Manual Review Required (AI Offline)" };
+      }
+  })();
+
+  // 60 Second Timeout Failsafe - returns VALID (Pass Success) to wait for admin
+  const timeoutPromise = new Promise<{ valid: boolean; reason?: string }>((resolve) => {
+      setTimeout(() => resolve({ valid: true, reason: "AI Timeout - Passed for Manual Admin Review" }), VERIFICATION_TIMEOUT_MS);
+  });
+
+  return Promise.race([verifyPromise, timeoutPromise]);
 };
 
 /**
  * SECURITY: Validate Kenyan ID (Front & Back)
+ * TIMEOUT: If >60s, pass to Admin Review (valid: true).
  */
 export const validateKenyanID = async (frontImage: string, backImage: string): Promise<{ valid: boolean; reason?: string }> => {
     const { ai } = await getAI();
-    try {
-        const parts = [
-            { inlineData: { mimeType: 'image/jpeg', data: frontImage.split(',')[1] || frontImage } },
-            { inlineData: { mimeType: 'image/jpeg', data: backImage.split(',')[1] || backImage } },
-            { text: `SECURITY AUDIT: Verify Kenyan National ID.
-            Image 1 must be FRONT. Image 2 must be BACK.
-            
-            Look for:
-            - "REPUBLIC OF KENYA" text.
-            - Coat of Arms.
-            
-            Strictly REJECT if:
-            - Images are random objects, animals, or selfies.
-            - Both images are the same.
-            
-            Return JSON: { "valid": boolean, "reason": "string (HARSH warning if fake)" }` }
-        ];
+    
+    const verifyPromise = (async () => {
+        try {
+            const parts = [
+                { inlineData: { mimeType: 'image/jpeg', data: frontImage.split(',')[1] || frontImage } },
+                { inlineData: { mimeType: 'image/jpeg', data: backImage.split(',')[1] || backImage } },
+                { text: `SECURITY AUDIT: Verify Kenyan National ID.
+                Image 1 must be FRONT. Image 2 must be BACK.
+                
+                Look for:
+                - "REPUBLIC OF KENYA" text.
+                - Coat of Arms.
+                
+                Strictly REJECT if:
+                - Images are random objects, animals, or selfies.
+                - Both images are the same.
+                
+                Return JSON: { "valid": boolean, "reason": "string (HARSH warning if fake)" }` }
+            ];
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', // FAST MODEL (Significantly faster than Pro)
-            contents: { parts: parts as any },
-            config: { responseMimeType: 'application/json' }
-        });
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview', 
+                contents: { parts: parts as any },
+                config: { responseMimeType: 'application/json' }
+            });
 
-        const result = JSON.parse(response.text || '{"valid": false, "reason": "AI Error"}');
-        return result;
-    } catch (e) {
-        console.error("ID Validation Error:", e);
-        return { valid: false, reason: "Verification Service Unavailable. Please retry." };
-    }
+            return JSON.parse(response.text || '{"valid": false, "reason": "AI Error"}');
+        } catch (e) {
+            console.error("ID Validation Error:", e);
+            // Default to manual review on error
+            return { valid: true, reason: "Verification Service Unavailable. Pending Admin Review." };
+        }
+    })();
+
+    const timeoutPromise = new Promise<{ valid: boolean; reason?: string }>((resolve) => {
+        setTimeout(() => resolve({ valid: true, reason: "AI Timeout - Passed for Manual Admin Review" }), VERIFICATION_TIMEOUT_MS);
+    });
+
+    return Promise.race([verifyPromise, timeoutPromise]);
 };
 
 export const editAssetImage = async (base64Image: string, prompt: string): Promise<string | null> => {

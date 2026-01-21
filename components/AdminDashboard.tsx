@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { getTransactions, saveSettings, getSettings, uploadMedia, updateAssetStatus, getAllUsers, updateUserStatus, updateTransactionStatus, getNurseMessages, deleteNurseMessage, getProducts, saveProduct, updateAsset, updateUserRole, deleteAsset, getTickets, updateTicket, getAssets } from '../services/storageService';
+import { getTransactions, saveSettings, getSettings, uploadMedia, updateAssetStatus, getAllUsers, updateUserStatus, updateTransactionStatus, getNurseMessages, deleteNurseMessage, getProducts, saveProduct, updateAsset, updateUserRole, deleteAsset, getTickets, updateTicket, getAssets, deleteProduct } from '../services/storageService';
 import { Transaction, AppSettings, Asset, UserProfile, ChatMessage, Product, SupportTicket } from '../types';
-import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, Truck, CheckCircle, XCircle, AlertCircle, DollarSign, Edit3, Trash2, Info, RefreshCw, PackageCheck, FileText, MapPin, ExternalLink, Key } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, Truck, CheckCircle, XCircle, AlertCircle, DollarSign, Edit3, Trash2, Info, RefreshCw, PackageCheck, FileText, MapPin, ExternalLink, Key, Plus, ShoppingBag } from 'lucide-react';
 import Button from './Button';
 
 interface AdminDashboardProps {
@@ -32,7 +32,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
   const [rejectReason, setRejectReason] = useState('');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  
+  // Product Shop State
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [productForm, setProductForm] = useState<Partial<Product>>({ name: '', price: 0, stock: 0, category: 'hygiene', image: '' });
+  const [productImageFile, setProductImageFile] = useState<File | null>(null);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   // Ticket Reply State
   const [replyText, setReplyText] = useState('');
@@ -104,6 +110,55 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
       }
   };
 
+  // --- PRODUCT / SHOP ACTIONS ---
+  const handleAddProduct = () => {
+    setProductForm({ name: '', price: 0, stock: 0, category: 'hygiene', image: '' });
+    setProductImageFile(null);
+    setEditingProduct(null);
+    setIsProductModalOpen(true);
+  };
+
+  const handleEditProduct = (p: Product) => {
+    setProductForm(p);
+    setProductImageFile(null);
+    setEditingProduct(p);
+    setIsProductModalOpen(true);
+  };
+
+  const handleSaveProduct = async () => {
+    if (!productForm.name || !productForm.price) {
+        alert("Please enter product name and price");
+        return;
+    }
+    setIsSavingProduct(true);
+    
+    let imageUrl = productForm.image || '';
+    if (productImageFile) {
+        imageUrl = await uploadMedia(productImageFile);
+    }
+
+    const productToSave: Product = {
+        id: editingProduct ? editingProduct.id : Date.now().toString(),
+        name: productForm.name!,
+        price: Number(productForm.price),
+        stock: Number(productForm.stock),
+        category: productForm.category as 'hygiene' | 'wellness',
+        image: imageUrl || 'https://via.placeholder.com/150'
+    };
+
+    await saveProduct(productToSave);
+    setIsProductModalOpen(false);
+    loadData();
+    setIsSavingProduct(false);
+  };
+
+  const handleDeleteProduct = async (id: string) => {
+    if(confirm("Are you sure you want to remove this product from the shop?")) {
+        await deleteProduct(id);
+        loadData();
+    }
+  };
+
   // --- TICKET ACTIONS ---
   const handleReplyTicket = async (ticketId: string) => {
       if (!replyText) return;
@@ -138,7 +193,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
   };
 
   const StatusBadge = ({ status }: { status?: string }) => {
-      // SAFEGUARD: Handle missing or undefined status
       if (!status) return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-gray-500 border border-gray-200">UNKNOWN</span>;
       
       const styles: Record<string, string> = {
@@ -344,7 +398,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                     {activeTab === 'inventory' && (
                         <div className="space-y-6">
                              <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                                <h2 className="text-2xl font-bold text-slate-900">Asset Management</h2>
+                                <h2 className="text-2xl font-bold text-slate-900">Asset Management (Rentals)</h2>
                                 <div className="flex gap-2">
                                     <button onClick={() => setInventoryFilter('pending')} className={`px-4 py-2 rounded-full text-xs font-bold uppercase transition-all ${inventoryFilter === 'pending' ? 'bg-amber-500 text-white shadow-md' : 'bg-white border text-slate-500'}`}>Pending Review</button>
                                     <button onClick={() => setInventoryFilter('approved')} className={`px-4 py-2 rounded-full text-xs font-bold uppercase transition-all ${inventoryFilter === 'approved' ? 'bg-indigo-600 text-white shadow-md' : 'bg-white border text-slate-500'}`}>Approved</button>
@@ -535,29 +589,82 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                         </div>
                     )}
 
-                    {/* HEALTH SEGMENT (NURSE LOGS) */}
+                    {/* HEALTH SEGMENT (SHOP & NURSE LOGS) */}
                     {activeTab === 'health' && (
-                        <div className="space-y-6">
-                            <h2 className="text-2xl font-bold text-slate-900">Health Segment Logs</h2>
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                {nurseLogs.length === 0 ? (
-                                    <div className="p-8 text-center text-slate-500 italic">No saved nurse logs available.</div>
+                        <div className="space-y-8">
+                            {/* SHOP INVENTORY SECTION */}
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div>
+                                        <h2 className="text-2xl font-bold text-slate-900">Shop Inventory</h2>
+                                        <p className="text-xs text-slate-500">Manage products for the Women's Health Store (Pads, Safety Gear, etc).</p>
+                                    </div>
+                                    <button onClick={handleAddProduct} className="bg-rose-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-rose-700 shadow-md">
+                                        <Plus size={16}/> Add Product
+                                    </button>
+                                </div>
+                                
+                                {products.length === 0 ? (
+                                    <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-300 text-slate-400 italic">
+                                        No products in the shop. Add some items to get started.
+                                    </div>
                                 ) : (
-                                    <div className="divide-y divide-slate-100">
-                                        {nurseLogs.map(log => (
-                                            <div key={log.id} className="p-4 flex justify-between items-start hover:bg-slate-50">
-                                                <div>
-                                                    <div className="text-xs text-slate-400 mb-1">{new Date(log.timestamp).toLocaleString()}</div>
-                                                    <p className="text-sm text-slate-800 font-medium">{log.text}</p>
-                                                    <span className="inline-block mt-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded uppercase">{log.role}</span>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                                        {products.map(p => (
+                                            <div key={p.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm group hover:shadow-md transition-shadow">
+                                                <div className="h-40 bg-slate-100 relative">
+                                                    <img src={p.image} className="w-full h-full object-cover"/>
+                                                    {p.stock < 5 && <span className="absolute top-2 right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm">Low Stock: {p.stock}</span>}
                                                 </div>
-                                                <button onClick={async () => {await deleteNurseMessage(log.id); await loadData();}} className="text-red-400 hover:text-red-600 p-2">
-                                                    <Trash2 size={16}/>
-                                                </button>
+                                                <div className="p-4">
+                                                    <div className="flex justify-between items-start mb-1">
+                                                        <div className="font-bold text-slate-900 truncate text-sm flex-1 mr-2">{p.name}</div>
+                                                        <div className="text-[10px] font-bold uppercase text-slate-400 border border-slate-200 px-1.5 rounded">{p.category}</div>
+                                                    </div>
+                                                    
+                                                    <div className="flex justify-between items-center mb-4">
+                                                        <span className="font-bold text-rose-600">KES {p.price}</span>
+                                                        <span className="text-xs font-bold text-slate-500">Qty: {p.stock}</span>
+                                                    </div>
+                                                    
+                                                    <div className="flex gap-2 border-t border-slate-100 pt-3">
+                                                        <button onClick={() => handleEditProduct(p)} className="flex-1 py-2 bg-slate-50 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-100 flex items-center justify-center gap-1">
+                                                            <Edit3 size={12}/> Edit
+                                                        </button>
+                                                        <button onClick={() => handleDeleteProduct(p.id)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                                            <Trash2 size={16}/>
+                                                        </button>
+                                                    </div>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 )}
+                            </div>
+
+                            {/* NURSE LOGS SECTION */}
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                <h2 className="text-xl font-bold text-slate-900 mb-4">Nurse Chat Logs</h2>
+                                <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
+                                    {nurseLogs.length === 0 ? (
+                                        <div className="p-8 text-center text-slate-500 italic">No saved nurse logs available.</div>
+                                    ) : (
+                                        <div className="divide-y divide-slate-200">
+                                            {nurseLogs.map(log => (
+                                                <div key={log.id} className="p-4 flex justify-between items-start hover:bg-white transition-colors">
+                                                    <div>
+                                                        <div className="text-xs text-slate-400 mb-1">{new Date(log.timestamp).toLocaleString()}</div>
+                                                        <p className="text-sm text-slate-800 font-medium">{log.text}</p>
+                                                        <span className="inline-block mt-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded uppercase">{log.role}</span>
+                                                    </div>
+                                                    <button onClick={async () => {await deleteNurseMessage(log.id); await loadData();}} className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 rounded transition-colors">
+                                                        <Trash2 size={16}/>
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -723,6 +830,68 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                     <div className="flex gap-2 mt-6">
                         <button onClick={() => setEditingAsset(null)} className="flex-1 py-2 text-slate-500 font-bold text-sm hover:bg-slate-50 rounded-lg">Cancel</button>
                         <button onClick={saveAssetChanges} className="flex-1 py-2 bg-indigo-600 text-white font-bold text-sm rounded-lg hover:bg-indigo-700">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* ADD/EDIT PRODUCT MODAL */}
+        {isProductModalOpen && (
+            <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+                        {editingProduct ? <Edit3 size={18}/> : <Plus size={18}/>} 
+                        {editingProduct ? 'Edit Product' : 'Add New Product'}
+                    </h3>
+                    
+                    <div className="space-y-4">
+                        {/* Image Upload */}
+                        <div className="flex items-center gap-4">
+                            <div className="w-16 h-16 bg-slate-100 rounded-lg border border-slate-200 flex items-center justify-center overflow-hidden">
+                                {productImageFile ? (
+                                    <img src={URL.createObjectURL(productImageFile)} className="w-full h-full object-cover" />
+                                ) : productForm.image ? (
+                                    <img src={productForm.image} className="w-full h-full object-cover" />
+                                ) : (
+                                    <ShoppingBag size={24} className="text-slate-300"/>
+                                )}
+                            </div>
+                            <div className="flex-1">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Product Image</label>
+                                <input type="file" onChange={e => setProductImageFile(e.target.files?.[0] || null)} className="block w-full text-xs text-slate-500 file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-rose-50 file:text-rose-700 hover:file:bg-rose-100"/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase">Product Name</label>
+                            <input value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} className="w-full border p-2 rounded-lg text-sm bg-slate-50" placeholder="e.g. Sanitary Pads Pack"/>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Price (KES)</label>
+                                <input type="number" value={productForm.price} onChange={e => setProductForm({...productForm, price: Number(e.target.value)})} className="w-full border p-2 rounded-lg text-sm bg-slate-50"/>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Stock Qty</label>
+                                <input type="number" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: Number(e.target.value)})} className="w-full border p-2 rounded-lg text-sm bg-slate-50"/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase">Category</label>
+                            <select value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value as any})} className="w-full border p-2 rounded-lg text-sm bg-slate-50">
+                                <option value="hygiene">Hygiene (Pads, Sanitizers)</option>
+                                <option value="wellness">Wellness (Vitamins, Supplements)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2 mt-6">
+                        <button onClick={() => setIsProductModalOpen(false)} className="flex-1 py-2 text-slate-500 font-bold text-sm hover:bg-slate-50 rounded-lg">Cancel</button>
+                        <Button variant="health" onClick={handleSaveProduct} isLoading={isSavingProduct} className="flex-1">
+                            Save Product
+                        </Button>
                     </div>
                 </div>
             </div>
