@@ -1,0 +1,9 @@
+{
+  "name": "Dual Power Women Hub",
+  "description": "A unified platform empowering women through Health (Privacy-First) and Wealth (Entrepreneurship), featuring AI-driven health advice, secure asset marketplaces, and advanced generative media tools.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
