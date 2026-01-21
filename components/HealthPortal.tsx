@@ -1,9 +1,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle } from 'lucide-react';
+import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle, CheckCircle, MapPin, Calendar, Clock } from 'lucide-react';
 import { ChatMessage, Product, UserProfile } from '../types';
 import { getHealthAdvice } from '../services/geminiService';
-import { saveNurseMessage, deleteNurseMessage, getNurseMessages, getProducts, getAllUsers } from '../services/storageService';
+import { saveNurseMessage, deleteNurseMessage, getNurseMessages, getProducts, getAllUsers, createShopOrder } from '../services/storageService';
+import Button from './Button';
 
 interface HealthPortalProps {
     user?: UserProfile;
@@ -26,6 +27,9 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
   
   // Shop State
   const [products, setProducts] = useState<Product[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [orderDate, setOrderDate] = useState('');
+  const [deliveryCoords, setDeliveryCoords] = useState<{lat: number, lng: number, accuracy: number} | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -33,13 +37,18 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-    if (isNurseUser) {
-        setSavedMessages(getNurseMessages());
-        setPatients(getAllUsers());
-    }
-    // Load products
-    setProducts(getProducts());
-  }, [messages, activeTab, isNurseUser]);
+    
+    const loadData = async () => {
+        if (isNurseUser) {
+            setSavedMessages(await getNurseMessages());
+            setPatients(await getAllUsers());
+        }
+        // Load products
+        setProducts(await getProducts());
+    };
+
+    loadData();
+  }, [messages, activeTab, isNurseUser, isLoading]); // Added isLoading to dependencies
 
   const switchTab = (tab: 'ai' | 'nurse' | 'shop') => {
     setActiveTab(tab);
@@ -72,6 +81,9 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
 
     try {
       const isNurseMode = activeTab === 'nurse';
+      // Note: We use 'messages' from closure which doesn't have the new userMsg yet.
+      // This is correct as we append userMsg manually in the service call if needed, 
+      // but getHealthAdvice expects history + current message separately.
       const response = await getHealthAdvice(
         messages.map(m => ({ role: m.role, text: m.text })),
         userMsg.text,
@@ -103,15 +115,70 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
   };
 
   // Nurse Actions
-  const handleSaveMessage = (msg: ChatMessage) => {
-      saveNurseMessage({ ...msg, isSaved: true });
-      setSavedMessages(getNurseMessages());
+  const handleSaveMessage = async (msg: ChatMessage) => {
+      await saveNurseMessage({ ...msg, isSaved: true });
+      setSavedMessages(await getNurseMessages());
       alert("Message saved to records.");
   };
 
-  const handleDeleteSavedMessage = (id: string) => {
-      deleteNurseMessage(id);
-      setSavedMessages(getNurseMessages());
+  const handleDeleteSavedMessage = async (id: string) => {
+      await deleteNurseMessage(id);
+      setSavedMessages(await getNurseMessages());
+  };
+
+  // Shop Actions
+  const handleGetLocation = () => {
+      if (!navigator.geolocation) {
+          alert("Geolocation is not supported by your browser");
+          return;
+      }
+      navigator.geolocation.getCurrentPosition(
+          (pos) => {
+              setDeliveryCoords({
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  accuracy: pos.coords.accuracy
+              });
+          },
+          (err) => {
+              alert("Unable to retrieve your location. Please ensure Location Services are enabled in your browser settings.");
+          },
+          { enableHighAccuracy: true }
+      );
+  };
+
+  const handleShopOrder = async () => {
+      if (!user || !selectedProduct) return;
+      if (!deliveryCoords) {
+          alert("Please capture your location for delivery.");
+          return;
+      }
+      if (!orderDate) {
+          alert("Please select a delivery date and time.");
+          return;
+      }
+
+      // Check 3 Hour Rule
+      const selectedTime = new Date(orderDate).getTime();
+      const minTime = Date.now() + (3 * 60 * 60 * 1000); // 3 hours from now
+
+      if (selectedTime < minTime) {
+          alert("Invalid Time: Delivery must be scheduled at least 3 hours from now.");
+          return;
+      }
+
+      await createShopOrder(selectedProduct, user, new Date(orderDate).toISOString(), deliveryCoords);
+      alert(`Order Placed for ${selectedProduct.name}! Delivery scheduled.`);
+      setSelectedProduct(null);
+      setOrderDate('');
+      setDeliveryCoords(null);
+  };
+
+  // Calculate Min DateTime string for input
+  const getMinDateTime = () => {
+      const d = new Date(Date.now() + (3 * 60 * 60 * 1000));
+      // Format to YYYY-MM-DDTHH:mm
+      return new Date(d.getTime() - (d.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
   };
 
   // --------------------------------------------------------------------------
@@ -241,8 +308,68 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
   // REGULAR USER VIEW (Mobile Optimized)
   // --------------------------------------------------------------------------
   return (
-    <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-800">
+    <div className="flex flex-col h-[100dvh] bg-slate-50 font-sans text-slate-800 relative">
       
+      {/* CHECKOUT MODAL */}
+      {selectedProduct && (
+          <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+                  <h3 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
+                      <ShoppingBag className="text-rose-600"/> Secure Checkout
+                  </h3>
+                  
+                  <div className="flex gap-4 mb-6 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                      <img src={selectedProduct.image} className="w-16 h-16 object-cover rounded-lg bg-white" alt="product"/>
+                      <div>
+                          <div className="font-bold text-slate-900">{selectedProduct.name}</div>
+                          <div className="text-sm text-slate-500">KES {selectedProduct.price}</div>
+                      </div>
+                  </div>
+
+                  {/* Location Step */}
+                  <div className="mb-6 space-y-3">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Step 1: Delivery Location</div>
+                      <p className="text-xs text-slate-500">To ensure discreet delivery, please pinpoint your exact location.</p>
+                      
+                      {!deliveryCoords ? (
+                          <button 
+                              onClick={handleGetLocation} 
+                              className="w-full py-3 bg-white border border-rose-200 text-rose-600 font-bold rounded-lg hover:bg-rose-50 flex items-center justify-center gap-2 transition-colors"
+                          >
+                              <MapPin size={16}/> Auto-Detect Current Location
+                          </button>
+                      ) : (
+                          <div className="flex items-center gap-2 text-green-700 bg-green-50 p-3 rounded-lg border border-green-200">
+                              <CheckCircle size={16} />
+                              <div className="text-xs font-bold">Location Captured (Accuracy: {Math.round(deliveryCoords.accuracy)}m)</div>
+                          </div>
+                      )}
+                  </div>
+
+                  {/* Time Step */}
+                  <div className="mb-6 space-y-3">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Step 2: Delivery Time</div>
+                      <p className="text-xs text-slate-500">Select a time at least <span className="font-bold text-slate-700">3 hours from now</span>.</p>
+                      <div className="relative">
+                          <input 
+                              type="datetime-local" 
+                              min={getMinDateTime()}
+                              value={orderDate}
+                              onChange={(e) => setOrderDate(e.target.value)}
+                              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-rose-500 outline-none"
+                          />
+                          <Clock className="absolute right-3 top-3 text-slate-400 pointer-events-none" size={16}/>
+                      </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                      <button onClick={() => {setSelectedProduct(null); setDeliveryCoords(null); setOrderDate('');}} className="px-4 py-3 rounded-lg font-bold text-slate-500 hover:bg-slate-100 transition-colors">Cancel</button>
+                      <Button variant="health" onClick={handleShopOrder} disabled={!deliveryCoords || !orderDate}>Confirm Order</Button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Professional Header */}
       <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-3 md:py-4 sticky top-0 z-20 shadow-sm flex justify-between items-center">
         <div>
@@ -403,6 +530,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
                       <div className="flex items-center justify-between mt-2">
                         <span className="font-bold text-slate-900 text-sm">KES {product.price}</span>
                         <button 
+                            onClick={() => { setSelectedProduct(product); setDeliveryCoords(null); setOrderDate(''); }}
                             className={`w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center transition-colors ${
                                 product.stock > 0 ? 'bg-slate-900 text-white hover:bg-rose-600' : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                             }`}

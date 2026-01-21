@@ -1,20 +1,64 @@
+
 import React, { useState, useEffect } from 'react';
 import HealthPortal from './components/HealthPortal';
 import WealthPortal from './components/WealthPortal';
 import LoginScreen from './components/LoginScreen';
 import AdminDashboard from './components/AdminDashboard';
 import { Segment, UserProfile, AppSettings } from './types';
-import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope } from 'lucide-react';
-import { getSettings, getTransactions, getNurseMessages } from './services/storageService';
+import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope, LayoutDashboard, Upload, Unlock, HelpCircle, Plus, MessageSquare } from 'lucide-react';
+import { getSettings, getTransactions, getNurseMessages, getTickets, uploadMedia, updateUserProfile, addTicket, getUserById } from './services/storageService';
+import Button from './components/Button';
 
 const App: React.FC = () => {
   const [currentSegment, setCurrentSegment] = useState<Segment>(Segment.LOGIN);
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '' });
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
+  
+  // Admin Session State (For Impersonation)
+  const [adminSession, setAdminSession] = useState<UserProfile | null>(null);
 
-  // Profile Modal State
+  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '' });
   const [showProfile, setShowProfile] = useState(false);
   const [stats, setStats] = useState({ earnings: 0, spending: 0, activeRentals: 0, nurseLogs: 0 });
+  const [isUploadingId, setIsUploadingId] = useState(false);
+
+  // Ticket State in Profile
+  const [myTickets, setMyTickets] = useState<any[]>([]);
+  const [showTicketForm, setShowTicketForm] = useState(false);
+  const [newTicket, setNewTicket] = useState<{type: 'complaint' | 'help' | 'return', subject: string, message: string}>({
+      type: 'help', subject: '', message: ''
+  });
+
+  // --- SESSION RESTORATION ---
+  useEffect(() => {
+    const restoreSession = async () => {
+      const storedUserId = localStorage.getItem('dp_user_id');
+      if (storedUserId) {
+        const storedUser = await getUserById(storedUserId);
+        if (storedUser) {
+          // Re-apply admin overrides if it's the master email
+          if (storedUser.email && storedUser.email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com') {
+              storedUser.role = 'admin';
+              storedUser.verified = true;
+              storedUser.approvalStatus = 'approved';
+          }
+
+          setUser(storedUser);
+          
+          if (storedUser.role === 'admin') {
+             setCurrentSegment(Segment.LANDING);
+          } else if (storedUser.role === 'nurse') {
+             setCurrentSegment(Segment.HEALTH);
+          } else {
+             setCurrentSegment(Segment.LANDING);
+          }
+        }
+      }
+      setIsRestoringSession(false);
+    };
+
+    restoreSession();
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -37,15 +81,62 @@ const App: React.FC = () => {
             const nurseLogsCount = msgs.length;
 
             setStats({ earnings, spending, activeRentals, nurseLogs: nurseLogsCount });
+            
+            const tickets = await getTickets();
+            setMyTickets(tickets.filter(t => t.userId === user.id));
         }
     };
     loadData();
-  }, [currentSegment, user]);
+  }, [currentSegment, user, showProfile]);
+
+  // GEOLOCATION TRACKING ON LOGIN
+  useEffect(() => {
+    if (user?.id) {
+       if ("geolocation" in navigator) {
+           navigator.geolocation.getCurrentPosition((position) => {
+               // Update state safely using functional update to avoid race conditions with other profile updates
+               setUser(prev => {
+                   if (!prev) return null;
+                   
+                   const updatedUser = {
+                       ...prev,
+                       lastLocation: {
+                           lat: position.coords.latitude,
+                           lng: position.coords.longitude,
+                           timestamp: new Date().toISOString()
+                       }
+                   };
+                   
+                   // Fire and forget DB update
+                   updateUserProfile(updatedUser).catch(err => console.error("Failed to update location", err));
+                   
+                   return updatedUser;
+               });
+           }, (err) => {
+               console.warn("Location permission denied or unavailable", err);
+           });
+       }
+    }
+  }, [user?.id]); // Only run when user ID changes (i.e., on login)
 
   const handleLogin = (loggedInUser: UserProfile) => {
+      // 1. Force Admin Role for the Owner
+      if (loggedInUser.email && loggedInUser.email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com') {
+          loggedInUser.role = 'admin';
+          loggedInUser.verified = true;
+          loggedInUser.approvalStatus = 'approved';
+      }
+
+      // 2. Persist Session
+      localStorage.setItem('dp_user_id', loggedInUser.id);
+
       setUser(loggedInUser);
+      // Clear any previous admin session on new login
+      setAdminSession(null); 
+      
       if (loggedInUser.role === 'admin') {
-          setCurrentSegment(Segment.ADMIN);
+          // Default to LANDING for better flow, allowing Admin to use the app first
+          setCurrentSegment(Segment.LANDING);
       } else if (loggedInUser.role === 'nurse') {
           setCurrentSegment(Segment.HEALTH);
       } else {
@@ -58,13 +149,16 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+      localStorage.removeItem('dp_user_id'); // Clear Session
       setUser(null);
+      setAdminSession(null);
       setCurrentSegment(Segment.LOGIN);
       setShowProfile(false);
   };
 
   // Switch contexts
   const handleSwitchToUserView = () => {
+      // Just change the view, keep user as Admin
       setCurrentSegment(Segment.LANDING);
   };
 
@@ -77,8 +171,52 @@ const App: React.FC = () => {
   };
 
   const handleImpersonateUser = (targetUser: UserProfile) => {
-      setUser(targetUser);
+      setAdminSession(user); // Save the real admin
+      setUser(targetUser);   // Switch to target user
       setCurrentSegment(Segment.LANDING);
+  };
+
+  const handleStopImpersonation = () => {
+      if (adminSession) {
+          setUser(adminSession);
+          setAdminSession(null);
+          setCurrentSegment(Segment.ADMIN);
+      }
+  };
+
+  const handleUploadId = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if(!file || !user) return;
+      
+      setIsUploadingId(true);
+      const url = await uploadMedia(file);
+      const updated = { ...user, idDocumentFront: url, verified: true };
+      await updateUserProfile(updated);
+      setUser(updated);
+      setIsUploadingId(false);
+      alert("ID Uploaded. Verification Pending.");
+  };
+
+  const handleSubmitTicket = async () => {
+      if(!user || !newTicket.subject || !newTicket.message) return;
+      
+      await addTicket({
+          id: Date.now().toString(),
+          userId: user.id,
+          userName: user.name,
+          type: newTicket.type,
+          subject: newTicket.subject,
+          message: newTicket.message,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+      });
+      
+      setNewTicket({ type: 'help', subject: '', message: '' });
+      setShowTicketForm(false);
+      
+      const tickets = await getTickets();
+      setMyTickets(tickets.filter(t => t.userId === user.id));
+      alert("Ticket Submitted Successfully.");
   };
 
   const ExitButton = () => (
@@ -103,12 +241,27 @@ const App: React.FC = () => {
       </div>
   );
 
-  if (currentSegment === Segment.LOGIN) {
+  // --- RENDER LOGIC ---
+
+  // 1. Session Loading State
+  if (isRestoringSession) {
+      return (
+          <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-4">
+                  <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                  <div className="text-indigo-400 font-bold tracking-widest text-xs animate-pulse">RESTORING SECURE SESSION...</div>
+              </div>
+          </div>
+      );
+  }
+
+  // 2. Login Screen
+  if (!user) {
       return <LoginScreen onLogin={handleLogin} logoUrl={settings.logoUrl} />;
   }
 
-  // CORRECTED: Pass required props to AdminDashboard
-  if (currentSegment === Segment.ADMIN && user?.role === 'admin') {
+  // 3. Strict Admin Dashboard
+  if ((user.role === 'admin' || user.role === 'administrator') && currentSegment === Segment.ADMIN) {
       return (
         <AdminDashboard 
             user={user} 
@@ -119,6 +272,7 @@ const App: React.FC = () => {
       );
   }
 
+  // 4. Nurse View
   if (currentSegment === Segment.HEALTH) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -128,6 +282,7 @@ const App: React.FC = () => {
     );
   }
 
+  // 5. Wealth Portal
   if (currentSegment === Segment.WEALTH && user) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -142,13 +297,38 @@ const App: React.FC = () => {
     );
   }
 
+  // 6. User Landing Page (Default)
   return (
     <div className="min-h-screen flex flex-col md:flex-row font-sans overflow-hidden relative">
       
       <BrandHeader />
 
+      {/* --- FAILSAFE ADMIN BUTTON --- */}
+      {/* This button ONLY appears for the owner email if they are on the landing page */}
+      {user.email && user.email.toLowerCase() === 'davidsonotienoomondi91@gmail.com' && (
+          <button 
+              onClick={() => setCurrentSegment(Segment.ADMIN)}
+              className="fixed bottom-6 right-6 z-[100] bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-full font-bold shadow-2xl flex items-center gap-2 animate-bounce hover:animate-none border-4 border-white/50"
+          >
+              <ShieldCheck size={20} />
+              ADMIN DASHBOARD
+          </button>
+      )}
+
       {/* Top Right Controls */}
       <div className="fixed top-4 right-4 md:top-6 md:right-6 z-50 flex items-center gap-3">
+        
+        {/* Admin Return Button - Shows if Admin is viewing as user OR Impersonating */}
+        {(user?.role === 'admin' || adminSession) && (
+            <button 
+                onClick={adminSession ? handleStopImpersonation : handleSwitchToAdminPanel}
+                className={`${adminSession ? 'bg-amber-600 border-amber-500' : 'bg-indigo-600 border-indigo-500'} text-white hover:opacity-90 px-4 py-2 rounded-full shadow-lg border text-xs font-bold flex items-center gap-2 transition-transform hover:scale-105`}
+            >
+                {adminSession ? <Unlock size={14} /> : <LayoutDashboard size={14} />} 
+                {adminSession ? "EXIT IMPERSONATION" : "ADMIN DASHBOARD"}
+            </button>
+        )}
+        
         {user && (
             <button 
                 onClick={() => setShowProfile(true)}
@@ -215,14 +395,73 @@ const App: React.FC = () => {
                                               {user.verified ? 'Verified Citizen (KYC Passed)' : 'Pending Verification'}
                                           </div>
                                       </div>
-                                      {user.idDocumentUrl && (
-                                          <a href={user.idDocumentUrl} target="_blank" rel="noreferrer" className="text-xs bg-slate-200 px-3 py-1 rounded-full text-slate-600 hover:bg-slate-300 font-bold flex items-center gap-1">
+                                      {user.idDocumentFront ? (
+                                          <a href={user.idDocumentFront} target="_blank" rel="noreferrer" className="text-xs bg-slate-200 px-3 py-1 rounded-full text-slate-600 hover:bg-slate-300 font-bold flex items-center gap-1">
                                               <FileText size={12}/> View ID Doc
                                           </a>
+                                      ) : (
+                                          <label className="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition-all">
+                                              {isUploadingId ? <span className="animate-spin">⌛</span> : <Upload size={14}/>} 
+                                              Upload National ID
+                                              <input type="file" onChange={handleUploadId} className="hidden" accept="image/*"/>
+                                          </label>
                                       )}
                                   </div>
                               </div>
                           </div>
+                      </section>
+                      
+                      {/* Section 4: Support & Tickets */}
+                      <section className="bg-blue-50 p-5 rounded-xl border border-blue-100">
+                           <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-sm font-bold text-blue-800 uppercase tracking-widest flex items-center gap-2"><HelpCircle size={16}/> Support & Claims</h3>
+                                {!showTicketForm && (
+                                    <button onClick={() => setShowTicketForm(true)} className="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700 flex items-center gap-1">
+                                        <Plus size={12}/> New Ticket
+                                    </button>
+                                )}
+                           </div>
+
+                           {showTicketForm ? (
+                               <div className="bg-white p-4 rounded-lg border border-blue-200 space-y-3">
+                                   <div className="flex justify-between">
+                                       <h4 className="font-bold text-sm">New Request</h4>
+                                       <button onClick={() => setShowTicketForm(false)} className="text-slate-400 hover:text-red-500"><X size={16}/></button>
+                                   </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Type</label>
+                                        <select className="w-full border p-2 rounded text-sm" value={newTicket.type} onChange={e => setNewTicket({...newTicket, type: e.target.value as any})}>
+                                            <option value="help">General Help</option>
+                                            <option value="complaint">Complaint</option>
+                                            <option value="return">Return Request</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <input className="w-full border p-2 rounded text-sm" placeholder="Subject" value={newTicket.subject} onChange={e => setNewTicket({...newTicket, subject: e.target.value})}/>
+                                    </div>
+                                    <div>
+                                        <textarea className="w-full border p-2 rounded text-sm" rows={2} placeholder="Message..." value={newTicket.message} onChange={e => setNewTicket({...newTicket, message: e.target.value})}></textarea>
+                                    </div>
+                                    <Button variant="primary" size="sm" onClick={handleSubmitTicket} className="w-full bg-blue-600">Submit</Button>
+                               </div>
+                           ) : (
+                               <div className="space-y-2">
+                                   {myTickets.length === 0 ? <p className="text-xs text-slate-400 italic">No tickets found.</p> : myTickets.map(t => (
+                                       <div key={t.id} className="bg-white p-3 rounded border border-blue-100">
+                                            <div className="flex justify-between text-xs mb-1">
+                                                <span className="font-bold text-slate-700">{t.subject}</span>
+                                                <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${t.status === 'resolved' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{t.status}</span>
+                                            </div>
+                                            <p className="text-xs text-slate-500">{t.message}</p>
+                                            {t.adminReply && (
+                                                <div className="mt-2 pt-2 border-t border-slate-100 text-xs text-green-700 flex gap-1 bg-green-50 p-2 rounded">
+                                                    <MessageSquare size={12} className="mt-0.5"/> <span className="font-bold">Reply:</span> {t.adminReply}
+                                                </div>
+                                            )}
+                                       </div>
+                                   ))}
+                               </div>
+                           )}
                       </section>
 
                       {/* Section 2: Wealth Record */}
@@ -263,8 +502,25 @@ const App: React.FC = () => {
                       </section>
                   </div>
                   
-                  <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end">
-                      <button onClick={() => setShowProfile(false)} className="px-6 py-2 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800">Close Profile</button>
+                  <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                      {/* Admin CTR Button */}
+                      {(user.role === 'admin' || adminSession) && (
+                          <button 
+                              onClick={() => {
+                                  setShowProfile(false);
+                                  if (adminSession) {
+                                      handleStopImpersonation();
+                                  } else {
+                                      handleSwitchToAdminPanel();
+                                  }
+                              }}
+                              className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center gap-2 transition-colors shadow-md"
+                          >
+                              <LayoutDashboard size={16} />
+                              go to CTR panel
+                          </button>
+                      )}
+                      <button onClick={() => setShowProfile(false)} className="px-6 py-2 bg-slate-200 text-slate-800 font-bold rounded-lg hover:bg-slate-300">Close Profile</button>
                   </div>
               </div>
           </div>

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Store, Wand2, Plus, MapPin, Video, DollarSign, Image as ImageIcon, Sparkles, CheckCircle, RefreshCw, Search, Briefcase, History, Upload, Shield, User, Filter, AlertCircle, ArrowUpDown, TrendingUp, Package, Truck, Clock, PackageCheck, LogOut, Stethoscope, Settings, ListPlus, HelpCircle, MessageSquare, AlertTriangle, FileText, X, Calendar, Layers, Video as VideoIcon, Info } from 'lucide-react';
+import { Store, Wand2, Plus, MapPin, Video, DollarSign, Image as ImageIcon, Sparkles, CheckCircle, RefreshCw, Search, Briefcase, History, Upload, Shield, User, Filter, AlertCircle, ArrowUpDown, TrendingUp, Package, Truck, Clock, PackageCheck, LogOut, Stethoscope, Settings, ListPlus, HelpCircle, MessageSquare, AlertTriangle, FileText, X, Calendar, Layers, Video as VideoIcon, Info, LayoutDashboard } from 'lucide-react';
 import Button from './Button';
 import { Asset, GeoLocation, UserProfile, Transaction, SupportTicket } from '../types';
 import { analyzeAsset, generateMarketingVideo, findLocalSuppliers, editAssetImage, validateAssetImages, validateKenyanID } from '../services/geminiService';
@@ -30,6 +30,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   // Rental Modal State
   const [selectedAssetForRent, setSelectedAssetForRent] = useState<Asset | null>(null);
   const [rentDays, setRentDays] = useState(1);
+  const [deliveryCoords, setDeliveryCoords] = useState<{lat: number, lng: number, accuracy: number} | null>(null);
 
   // Tickets
   const [myTickets, setMyTickets] = useState<SupportTicket[]>([]);
@@ -40,6 +41,9 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 
   // Sorting
   const [sortOrder, setSortOrder] = useState<'newest' | 'price-asc' | 'price-desc'>('newest');
+
+  // Check if user is admin (case insensitive)
+  const isUserAdmin = user?.role ? ['admin', 'administrator'].includes(user.role.trim().toLowerCase()) : false;
 
   useEffect(() => {
     const load = async () => {
@@ -75,6 +79,16 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       }
   };
 
+  // Helper to convert File to Base64 Promise
+  const fileToBase64 = (file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = error => reject(error);
+      });
+  };
+
   const handleUploadId = async () => {
       if (!idFrontFile || !idBackFile) {
           alert("Both Front and Back of ID are required.");
@@ -82,38 +96,49 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       }
       setIsVerifyingId(true);
       
-      // 1. Upload
-      const frontUrl = await uploadMedia(idFrontFile);
-      const backUrl = await uploadMedia(idBackFile);
-      
-      // 2. AI Security Check
-      const validation = await validateKenyanID(frontUrl, backUrl);
-      
-      if (!validation.valid) {
-          setIsVerifyingId(false);
-          alert(`SECURITY ALERT: ID REJECTED.\n\nREASON: ${validation.reason}\n\nWARNING: Uploading fake identification is a criminal offense under Kenyan Law. Your account has been flagged.`);
-          return;
-      }
+      try {
+          // 1. Get Base64 for AI Verification (FAST & RELIABLE)
+          const frontBase64 = await fileToBase64(idFrontFile);
+          const backBase64 = await fileToBase64(idBackFile);
+          
+          // 2. AI Security Check (Direct Base64)
+          const validation = await validateKenyanID(frontBase64, backBase64);
+          
+          if (!validation.valid) {
+              setIsVerifyingId(false);
+              alert(`SECURITY ALERT: ID REJECTED.\n\nREASON: ${validation.reason}\n\nWARNING: Uploading fake identification is a criminal offense under Kenyan Law.`);
+              return;
+          }
 
-      // 3. Success
-      const updatedUser = { 
-          ...user, 
-          idDocumentFront: frontUrl, 
-          idDocumentBack: backUrl, 
-          verified: false, // Still needs admin manual check, but AI passed structure
-          approvalStatus: 'pending' as const 
-      };
-      
-      await updateUserProfile(updatedUser);
-      onUpdateUser(updatedUser);
-      setIsVerifyingId(false);
-      setShowVerificationModal(false);
-      alert("ID Submitted Successfully. Admin approval pending.");
+          // 3. Upload to Storage (Only if valid)
+          const frontUrl = await uploadMedia(idFrontFile);
+          const backUrl = await uploadMedia(idBackFile);
+
+          // 4. Success
+          const updatedUser = { 
+              ...user, 
+              idDocumentFront: frontUrl, 
+              idDocumentBack: backUrl, 
+              verified: false, 
+              approvalStatus: 'pending' as const 
+          };
+          
+          await updateUserProfile(updatedUser);
+          onUpdateUser(updatedUser);
+          setIsVerifyingId(false);
+          setShowVerificationModal(false);
+          alert("ID Submitted Successfully. Admin approval pending.");
+
+      } catch (error) {
+          console.error(error);
+          setIsVerifyingId(false);
+          alert("Verification failed due to connection error. Please try again.");
+      }
   };
 
   // Create Listing State
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [videoProofFile, setVideoProofFile] = useState<File | null>(null); // New Video State
+  const [videoProofFile, setVideoProofFile] = useState<File | null>(null); 
   const [videoDuration, setVideoDuration] = useState<number>(0);
   const [previewImages, setPreviewImages] = useState<string[]>([]); // Array of base64
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -125,7 +150,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       condition: '', 
       description: '', 
       price: '', 
-      specialDetails: '' // New Field
+      specialDetails: '' 
   });
   
   const [videoPrompt, setVideoPrompt] = useState('');
@@ -135,23 +160,43 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   const [mapResults, setMapResults] = useState<any[]>([]);
   const [isSearchingMap, setIsSearchingMap] = useState(false);
 
-  // NEW: Handle Rent Click
   const onRentClick = (asset: Asset) => {
       requireVerification(() => {
           setSelectedAssetForRent(asset);
           setRentDays(1);
+          setDeliveryCoords(null);
       });
   };
 
-  // NEW: Confirm Rent
+  const handleGetLocation = () => {
+      if (!navigator.geolocation) {
+          alert("Geolocation is not supported by your browser");
+          return;
+      }
+      navigator.geolocation.getCurrentPosition(
+          (pos) => {
+              setDeliveryCoords({
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  accuracy: pos.coords.accuracy
+              });
+          },
+          (err) => {
+              alert("Unable to retrieve your location. Please ensure Location Services are enabled in your browser settings.");
+          },
+          { enableHighAccuracy: true }
+      );
+  };
+
   const confirmRent = async () => {
-      if (selectedAssetForRent && rentDays > 0) {
+      if (selectedAssetForRent && rentDays > 0 && deliveryCoords) {
           window.open('https://paywith.nobuk.africa/saacaxzyzb', '_blank');
           alert(`PAYMENT SIMULATION:\n\nPlease complete payment of KES ${(selectedAssetForRent.dailyRate * rentDays).toLocaleString()} on the opened tab.`);
           
-          await rentAsset(selectedAssetForRent.id, user, rentDays);
+          await rentAsset(selectedAssetForRent.id, user, rentDays, deliveryCoords);
           setSelectedAssetForRent(null);
           setRentDays(1);
+          setDeliveryCoords(null);
           
           // Refresh data
           setAssets(await getAssets());
@@ -163,27 +208,21 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   };
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+    // Cast to File[] explicitly to avoid 'unknown' inference in some environments
+    const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
 
     setSelectedFiles(prev => [...prev, ...files]);
 
-    // Convert to base64 for preview and analysis
     const newPreviews: string[] = [];
     for (const file of files) {
-        const reader = new FileReader();
-        await new Promise<void>((resolve) => {
-            reader.onload = () => {
-                if (typeof reader.result === 'string') newPreviews.push(reader.result);
-                resolve();
-            };
-            reader.readAsDataURL(file);
-        });
+        const b64 = await fileToBase64(file);
+        newPreviews.push(b64);
     }
     
     setPreviewImages(prev => [...prev, ...newPreviews]);
 
-    // Analyze the FIRST image only for auto-fill to save tokens
+    // Analyze the FIRST image only for auto-fill
     if (!isAnalyzing && newPreviews.length > 0) {
         setIsAnalyzing(true);
         const rawJson = await analyzeAsset(newPreviews[0].split(',')[1]);
@@ -206,7 +245,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       const file = e.target.files?.[0];
       if (!file) return;
 
-      // Check duration
       const video = document.createElement('video');
       video.preload = 'metadata';
       video.onloadedmetadata = function() {
@@ -214,16 +252,14 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           const duration = video.duration;
           setVideoDuration(duration);
           
-          // Relaxed constraint: 3s to 60s
           if (duration < 3 || duration > 60) {
               alert(`Video Duration Error!\n\nYour video is ${duration.toFixed(1)} seconds.\n\nRequirement: Between 3 and 60 seconds.`);
               setVideoProofFile(null);
-              e.target.value = ''; // Clear input
+              e.target.value = ''; 
           } else {
               setVideoProofFile(file);
           }
       };
-      // Explicitly cast to any to avoid type error
       video.src = URL.createObjectURL(file);
   };
 
@@ -240,7 +276,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
     }
     setIsGeneratingVideo(true);
     try {
-      // Use first image if available
       const imgBytes = previewImages.length > 0 ? previewImages[0].split(',')[1] : undefined;
       const result = await generateMarketingVideo(videoPrompt, imgBytes);
       setVideoUrl(result);
@@ -257,48 +292,42 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 
   const handleSubmitListing = async () => {
      requireVerification(async () => {
-        // 0. Validate Text Fields Check
         if (!formData.title || !formData.category || !formData.condition || !formData.description || !formData.price) {
-             alert("INCOMPLETE FORM: Please fill in all required text fields (Title, Category, Condition, Price, Description) to proceed.");
+             alert("INCOMPLETE FORM: Please fill in all required text fields.");
              return;
         }
 
-        // 1. Min 5 images check
         if (selectedFiles.length < 5) {
-            alert(`MISSING IMAGES: You must upload at least 5 images of the product.\n\nCurrent Count: ${selectedFiles.length}`);
+            alert(`MISSING IMAGES: You must upload at least 5 images of the product.`);
             return;
         }
 
-        // 2. Video Proof Check
         if (!videoProofFile) {
-            alert("MISSING PROOF: You must upload a proof of ownership video. This is required for security.");
+            alert("MISSING PROOF: You must upload a proof of ownership video.");
             return;
         }
 
         setIsUploading(true);
 
-        // 3. AI Security Check (Pass base64 previews to save uploading bandwidth if rejected)
+        // AI Security Check using local previews (Base64) - FAST
         const validation = await validateAssetImages(previewImages, formData.title);
         
         if (!validation.valid) {
-            setIsUploading(false); // Pause loading to show dialog
+            setIsUploading(false);
             const userWantsReview = window.confirm(
                 `⚠️ AI SECURITY WARNING ⚠️\n\n` +
                 `System Analysis Failed: ${validation.reason}\n\n` +
                 `The system believes this listing may be invalid or low quality.\n\n` +
-                `You can:\n` +
-                `1. CANCEL to go back and fix the images/title.\n` +
-                `2. OK to submit for MANUAL ADMIN REVIEW (Note: Fake listings lead to permanent bans).`
+                `Click OK to submit for MANUAL ADMIN REVIEW.`
             );
             
             if (!userWantsReview) {
-                // User chose to fix it.
                 return; 
             }
-            setIsUploading(true); // Resume loading for manual submission
+            setIsUploading(true); 
         }
 
-        // 4. Upload Images & Video
+        // Upload Images & Video to Storage
         const uploadedImageUrls: string[] = [];
         for (const file of selectedFiles) {
             const url = await uploadMedia(file);
@@ -307,30 +336,27 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
         
         const uploadedVideoUrl = await uploadMedia(videoProofFile);
 
-        // 5. Submit Asset
         await addAsset({
             id: Date.now().toString(), 
             name: formData.title, 
             description: formData.description, 
-            specialDetails: formData.specialDetails, // New Field
+            specialDetails: formData.specialDetails, 
             dailyRate: parseInt(formData.price), 
             images: uploadedImageUrls, 
-            videoProof: uploadedVideoUrl, // New Field
+            videoProof: uploadedVideoUrl, 
             verified: false, 
             status: 'available', 
             ownerId: user.id, 
-            // If valid=false, mark as rejected so it goes to Rejected tab. If valid=true, mark as pending.
             moderationStatus: validation.valid ? 'pending' : 'rejected',
             rejectionReason: validation.valid ? undefined : `AI Rejection: ${validation.reason}`
         });
 
         setIsUploading(false);
         
-        // Explicit feedback
         if (validation.valid) {
-            alert("✅ SUCCESS: Listing Submitted! It is now pending final Admin approval.");
+            alert("✅ SUCCESS: Listing Submitted! Pending Admin approval.");
         } else {
-            alert("⚠️ FLAGGED SUBMISSION: Your listing was rejected by AI but has been sent to Admins for Manual Review as requested. Please wait for verification.");
+            alert("⚠️ FLAGGED: Listing sent for Manual Review.");
         }
 
         setActiveView('profile');
@@ -388,7 +414,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       {/* RENTAL CONFIRMATION MODAL */}
       {selectedAssetForRent && (
           <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl">
+              <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
                   <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                       <Calendar className="text-indigo-600"/> Rent Asset
                   </h3>
@@ -413,6 +439,26 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                       </div>
                   </div>
 
+                  {/* Delivery Location Section */}
+                  <div className="mb-6 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+                      <label className="block text-xs font-bold text-indigo-900 uppercase mb-2">Delivery / Pickup Location</label>
+                      <p className="text-xs text-indigo-700 mb-3">You must allow location access for accurate delivery.</p>
+                      
+                      {!deliveryCoords ? (
+                          <button 
+                            onClick={handleGetLocation}
+                            className="w-full py-3 bg-white border border-indigo-200 text-indigo-600 font-bold rounded-lg hover:bg-indigo-50 flex items-center justify-center gap-2"
+                          >
+                              <MapPin size={16} /> Auto-Detect Delivery Location
+                          </button>
+                      ) : (
+                          <div className="flex items-center gap-2 text-green-700 bg-green-50 p-3 rounded-lg border border-green-200">
+                              <CheckCircle size={16} />
+                              <div className="text-xs font-bold">Location Captured (Accuracy: {Math.round(deliveryCoords.accuracy)}m)</div>
+                          </div>
+                      )}
+                  </div>
+
                   <div className="flex justify-between items-center mb-6 pt-4 border-t border-slate-100">
                       <span className="text-sm font-bold text-slate-500">Total Cost</span>
                       <span className="text-2xl font-black text-indigo-600">KES {(selectedAssetForRent.dailyRate * rentDays).toLocaleString()}</span>
@@ -420,7 +466,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 
                   <div className="grid grid-cols-2 gap-3">
                       <button onClick={() => setSelectedAssetForRent(null)} className="px-4 py-3 rounded-lg font-bold text-slate-500 hover:bg-slate-100">Cancel</button>
-                      <Button variant="wealth" onClick={confirmRent}>Confirm Rent</Button>
+                      <Button variant="wealth" onClick={confirmRent} disabled={!deliveryCoords}>Confirm Rent</Button>
                   </div>
               </div>
           </div>
@@ -550,6 +596,25 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                         <div className="mt-2 text-xs font-bold uppercase text-slate-400 bg-slate-100 inline-block px-2 py-1 rounded">{user.role}</div>
                     </div>
                 </div>
+
+                {/* Admin Quick Link - Prominent for Admins inside Wealth Portal */}
+                {isUserAdmin && onSwitchToAdmin && (
+                    <div className="bg-indigo-900 text-white p-4 rounded-xl shadow-lg mb-6 flex justify-between items-center border border-indigo-700">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-white/10 p-2 rounded-lg">
+                                <LayoutDashboard className="text-amber-400" size={24} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-lg">Admin Controls</h3>
+                                <p className="text-xs text-indigo-200">Return to main dashboard directly.</p>
+                            </div>
+                        </div>
+                        <Button variant="wealth" onClick={onSwitchToAdmin} className="bg-white text-indigo-900 hover:bg-indigo-50 border-0">
+                            Go to Dashboard
+                        </Button>
+                    </div>
+                )}
+
                 {/* My Listings */}
                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
@@ -749,4 +814,3 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 };
 
 export default WealthPortal;
-    

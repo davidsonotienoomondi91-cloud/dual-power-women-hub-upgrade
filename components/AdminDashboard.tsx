@@ -1,21 +1,22 @@
 
 import React, { useState, useEffect } from 'react';
-import { getTransactions, saveSettings, getSettings, uploadMedia, returnAsset, getAssets, updateAssetStatus, getAllUsers, updateUserStatus, updateTransactionStatus, getNurseMessages, deleteNurseMessage, getProducts, saveProduct, deleteProduct, updateAsset, updateUserRole, deleteAsset, getTickets, updateTicket } from '../services/storageService';
+import { getTransactions, saveSettings, getSettings, uploadMedia, updateAssetStatus, getAllUsers, updateUserStatus, updateTransactionStatus, getNurseMessages, deleteNurseMessage, getProducts, saveProduct, updateAsset, updateUserRole, deleteAsset, getTickets, updateTicket, getAssets } from '../services/storageService';
 import { Transaction, AppSettings, Asset, UserProfile, ChatMessage, Product, SupportTicket } from '../types';
-import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, X, ChevronRight, Truck, CheckCircle, XCircle, AlertCircle, Search, Filter, MoreVertical, Package, DollarSign, MapPin, Eye, Edit3, Trash2, Save, Plus, Stethoscope, ShoppingBag, ArrowUpRight, ArrowDownLeft, PackageCheck, Layers, FileText, Video as VideoIcon, Info, Reply } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, Truck, CheckCircle, XCircle, AlertCircle, DollarSign, Edit3, Trash2, Info, RefreshCw, PackageCheck, FileText, MapPin, ExternalLink } from 'lucide-react';
 import Button from './Button';
 
 interface AdminDashboardProps {
   user: UserProfile;
   onLogout: () => void;
-  onSwitchToUser: () => void;
-  onImpersonate: (user: UserProfile) => void;
+  onSwitchToUser?: () => void;
+  onImpersonate?: (user: UserProfile) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitchToUser, onImpersonate }) => {
   // Navigation State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'inventory' | 'users' | 'health' | 'support' | 'settings'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Data State
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -30,11 +31,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
-
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Ticket Reply State
   const [replyText, setReplyText] = useState('');
@@ -51,67 +49,67 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
     loadData();
   }, [activeTab]);
 
-  const loadData = () => {
-    setTransactions(getTransactions());
-    setAssets(getAssets());
-    setUsersData(getAllUsers());
-    setNurseLogs(getNurseMessages());
-    setProducts(getProducts());
-    setTickets(getTickets());
-    setSettings(getSettings());
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+        setTransactions(await getTransactions());
+        setAssets(await getAssets());
+        setUsersData(await getAllUsers());
+        setNurseLogs(await getNurseMessages());
+        setProducts(await getProducts());
+        setTickets(await getTickets());
+        setSettings(await getSettings());
+    } catch (e) {
+        console.error("Failed to load admin data", e);
+    }
+    setIsLoading(false);
+  };
+
+  const handleRefresh = () => {
+      loadData();
   };
 
   // --- LOGISTICS ACTIONS ---
-  const handleOrderStatusChange = (txId: string, newStatus: Transaction['status']) => {
-      updateTransactionStatus(txId, newStatus);
+  const handleOrderStatusChange = async (txId: string, newStatus: Transaction['status']) => {
+      await updateTransactionStatus(txId, newStatus);
       loadData();
       alert(`Order updated to: ${newStatus.toUpperCase().replace('_', ' ')}`);
   };
 
   // --- ASSET ACTIONS ---
-  const handleAssetApproval = (id: string, status: 'approved' | 'rejected') => {
+  const handleAssetApproval = async (id: string, status: 'approved' | 'rejected') => {
       if (status === 'rejected') {
           setSelectedAssetId(id);
           setRejectReason('');
           setIsRejectModalOpen(true);
       } else {
-          updateAssetStatus(id, 'approved');
+          await updateAssetStatus(id, 'approved');
           loadData();
       }
   };
 
-  const confirmReject = () => {
+  const confirmReject = async () => {
       if (selectedAssetId) {
-          updateAssetStatus(selectedAssetId, 'rejected', rejectReason);
+          await updateAssetStatus(selectedAssetId, 'rejected', rejectReason);
           setIsRejectModalOpen(false);
           loadData();
       }
   };
 
-  const saveAssetChanges = () => {
+  const saveAssetChanges = async () => {
       if (editingAsset) {
-          updateAsset(editingAsset);
+          await updateAsset(editingAsset);
           setEditingAsset(null);
           loadData();
       }
   };
 
-  // --- PRODUCT ACTIONS ---
-  const saveProductChanges = () => {
-      if (editingProduct && editingProduct.name) {
-          saveProduct(editingProduct);
-          setIsProductModalOpen(false);
-          setEditingProduct(null);
-          loadData();
-      }
-  };
-
   // --- TICKET ACTIONS ---
-  const handleReplyTicket = (ticketId: string) => {
+  const handleReplyTicket = async (ticketId: string) => {
       if (!replyText) return;
       const ticket = tickets.find(t => t.id === ticketId);
       if (ticket) {
-          updateTicket({ ...ticket, adminReply: replyText, status: 'resolved' });
+          await updateTicket({ ...ticket, adminReply: replyText, status: 'resolved' });
           setReplyText('');
           setActiveTicketId(null);
           loadData();
@@ -119,9 +117,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
   };
 
   // --- USER ACTIONS ---
-  const changeUserRole = (userId: string, role: string) => {
+  const changeUserRole = async (userId: string, role: string) => {
       if(window.confirm(`Change user role to ${role}?`)) {
-          updateUserRole(userId, role as any);
+          await updateUserRole(userId, role as any);
           loadData();
       }
   };
@@ -133,13 +131,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
       if (logoFile) {
           url = await uploadMedia(logoFile);
       }
-      saveSettings({ ...settings, logoUrl: url });
+      await saveSettings({ ...settings, logoUrl: url });
       loadData();
       setIsSavingSettings(false);
       alert("Settings Saved.");
   };
 
-  const StatusBadge = ({ status }: { status: string }) => {
+  const StatusBadge = ({ status }: { status?: string }) => {
+      // SAFEGUARD: Handle missing or undefined status
+      if (!status) return <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-gray-100 text-gray-500 border border-gray-200">UNKNOWN</span>;
+      
       const styles: Record<string, string> = {
           approved: 'bg-emerald-100 text-emerald-800 border-emerald-200',
           active: 'bg-emerald-100 text-emerald-800 border-emerald-200',
@@ -153,7 +154,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
           maintenance: 'bg-slate-100 text-slate-800 border-slate-200',
           resolved: 'bg-green-100 text-green-800 border-green-200',
       };
-      const normalized = status.toLowerCase();
+      
+      let normalized = 'pending';
+      try {
+        normalized = status.toLowerCase();
+      } catch (e) {
+        normalized = 'pending';
+      }
+      
       const style = styles[normalized] || 'bg-gray-100 text-gray-800';
       return <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${style}`}>{status.replace('_', ' ')}</span>;
   };
@@ -189,9 +197,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                 ))}
             </nav>
             <div className="p-4 border-t border-slate-800 space-y-2">
-                <button onClick={onSwitchToUser} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+                <button onClick={onSwitchToUser} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-indigo-400 hover:text-white hover:bg-slate-800 transition-colors">
+                    <LogOut size={20} className="rotate-180" />
+                    {isSidebarOpen && <span className="text-sm font-medium">Exit to App</span>}
+                </button>
+                <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-red-400 hover:text-white hover:bg-red-900/50 transition-colors">
                     <LogOut size={20} />
-                    {isSidebarOpen && <span className="text-sm font-medium">Switch to User</span>}
+                    {isSidebarOpen && <span className="text-sm font-medium">Logout</span>}
                 </button>
             </div>
         </aside>
@@ -199,7 +211,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
         {/* --- MAIN CONTENT --- */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-20">
-                <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"><Menu size={20} /></button>
+                <div className="flex items-center gap-4">
+                     <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"><Menu size={20} /></button>
+                     <button onClick={handleRefresh} className={`p-2 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center gap-2 ${isLoading ? 'animate-spin' : ''}`} title="Refresh Data">
+                         <RefreshCw size={20} />
+                         <span className="text-xs font-bold hidden sm:inline">Refresh Data</span>
+                     </button>
+                </div>
+                
                 <div className="flex items-center gap-4">
                     <div className="text-right hidden sm:block">
                         <div className="text-sm font-bold text-slate-900">{user.name}</div>
@@ -402,7 +421,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                             <button onClick={() => setEditingAsset(asset)} className="flex-1 bg-slate-50 text-slate-700 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1">
                                                                 <Edit3 size={14}/> Edit
                                                             </button>
-                                                            <button onClick={() => {if(confirm('Delete asset?')) { deleteAsset(asset.id); loadData(); }}} className="px-3 bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 rounded-lg">
+                                                            <button onClick={async () => {if(confirm('Delete asset?')) { await deleteAsset(asset.id); await loadData(); }}} className="px-3 bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 rounded-lg">
                                                                 <Trash2 size={16}/>
                                                             </button>
                                                         </>
@@ -428,6 +447,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                 <th className="px-6 py-4">User Details</th>
                                                 <th className="px-6 py-4">Role</th>
                                                 <th className="px-6 py-4">Verification</th>
+                                                <th className="px-6 py-4">Location</th>
                                                 <th className="px-6 py-4 text-right">Actions</th>
                                             </tr>
                                         </thead>
@@ -441,7 +461,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                     </td>
                                                     <td className="px-6 py-4">
                                                         <select 
-                                                            value={u.role}
+                                                            value={u.role || 'user'}
                                                             onChange={(e) => changeUserRole(u.id, e.target.value)}
                                                             className="bg-slate-50 border border-slate-200 text-slate-900 text-xs rounded-lg p-2 font-bold uppercase cursor-pointer hover:border-indigo-300 focus:ring-2 focus:ring-indigo-500 outline-none"
                                                         >
@@ -449,9 +469,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                             <option value="nurse">Nurse</option>
                                                             <option value="admin">Admin</option>
                                                         </select>
+                                                        {/* IMPERSONATION BUTTON */}
+                                                        {onImpersonate && (
+                                                            <button 
+                                                                onClick={() => onImpersonate(u)} 
+                                                                className="mt-2 text-[10px] text-indigo-600 font-bold hover:underline flex items-center gap-1"
+                                                                title="Login as this user to view their portal"
+                                                            >
+                                                                <LogOut size={10} className="rotate-180"/> Login As User
+                                                            </button>
+                                                        )}
                                                     </td>
                                                     <td className="px-6 py-4">
-                                                        {u.approvalStatus === 'pending' ? (
+                                                        {(u.approvalStatus || 'pending') === 'pending' ? (
                                                             <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-bold uppercase"><AlertCircle size={12}/> Pending</span>
                                                         ) : (
                                                             <StatusBadge status={u.approvalStatus} />
@@ -468,16 +498,32 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                             </div>
                                                         )}
                                                     </td>
+                                                    <td className="px-6 py-4">
+                                                        {u.lastLocation ? (
+                                                            <div>
+                                                                <a 
+                                                                    href={`https://www.google.com/maps?q=${u.lastLocation.lat},${u.lastLocation.lng}`}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    className="flex items-center gap-1 text-indigo-600 font-bold text-xs hover:underline"
+                                                                >
+                                                                    <MapPin size={12} /> View Map <ExternalLink size={10}/>
+                                                                </a>
+                                                                <div className="text-[10px] text-slate-400 mt-1">
+                                                                    {new Date(u.lastLocation.timestamp).toLocaleDateString()}
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-slate-400 text-xs">N/A</span>
+                                                        )}
+                                                    </td>
                                                     <td className="px-6 py-4 text-right">
                                                         <div className="flex justify-end gap-2">
                                                             {u.approvalStatus === 'pending' && (
-                                                                <button onClick={() => {updateUserStatus(u.id, 'approved'); loadData();}} className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 shadow-sm">
+                                                                <button onClick={async () => {await updateUserStatus(u.id, 'approved'); await loadData();}} className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-700 shadow-sm">
                                                                     Approve
                                                                 </button>
                                                             )}
-                                                            <button onClick={() => onImpersonate(u)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-slate-700 shadow-sm flex items-center gap-1">
-                                                                <Eye size={14}/> Login As
-                                                            </button>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -505,7 +551,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                                     <p className="text-sm text-slate-800 font-medium">{log.text}</p>
                                                     <span className="inline-block mt-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded uppercase">{log.role}</span>
                                                 </div>
-                                                <button onClick={() => {deleteNurseMessage(log.id); loadData();}} className="text-red-400 hover:text-red-600 p-2">
+                                                <button onClick={async () => {await deleteNurseMessage(log.id); await loadData();}} className="text-red-400 hover:text-red-600 p-2">
                                                     <Trash2 size={16}/>
                                                 </button>
                                             </div>

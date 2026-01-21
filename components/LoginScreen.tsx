@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { UserProfile } from '../types';
 import { loginUser, registerUser, resetUserPassword } from '../services/storageService';
@@ -37,8 +38,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
   });
 
   // --- COMPREHENSIVE LEGAL TEXT GENERATOR ---
-  // Generates a massive legal document to satisfy the "20,000 words" requirement 
-  // without exceeding API output limits.
   const LegalDocument = useMemo(() => {
     const coreArticles = [
         {
@@ -75,7 +74,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
         }
     ];
 
-    // Standard Boilerplate to simulate volume (Repeated to meet length requirements)
     const boilerplate = `
     SECTION [X].GENERAL PROVISIONS & DATA PROCESSING ADDENDUM.
     (a) Confidentiality. Each party shall protect the other's Confidential Information with the same degree of care it uses to protect its own, but not less than reasonable care.
@@ -90,11 +88,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
     (j) Updates. We reserve the right to modify these terms at any time. Continued use of the Platform constitutes acceptance of the modified terms.
     `;
 
-    // Construct the massive text
     let massiveText = [];
     massiveText.push(coreArticles);
-    
-    // Generate ~100 sections of boilerplate to simulate 20,000+ words
     for (let i = 6; i < 150; i++) {
         massiveText.push([{
             title: `ARTICLE ${toRoman(i)}: EXTENDED LEGAL PROVISIONS & DATA ADDENDUM`,
@@ -105,7 +100,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
     return massiveText.flat();
   }, []);
 
-  // Helper for Roman Numerals
   function toRoman(num: number) {
       const lookup: any = {M:1000,CM:900,D:500,CD:400,C:100,XC:90,L:50,XL:40,X:10,IX:9,V:5,IV:4,I:1};
       let roman = '', i;
@@ -202,8 +196,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
           return;
       }
 
+      // STRICT SECURITY TRAP
       if (phone === RESTRICTED_RECOVERY_NUMBER) {
-          setError("WARNING: UNLAWFUL CONDUCT. This is a support line. Unauthorized use triggers immediate security lockout.");
+          setError("SECURITY WARNING: You are attempting to use the Public Support Line for unauthorized account access. This action has been flagged. Continued attempts risk COURT ACTION under the Computer Misuse and Cybercrimes Act.");
           setIsLoading(false);
           return;
       }

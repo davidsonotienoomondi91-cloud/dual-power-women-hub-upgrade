@@ -1,36 +1,37 @@
+
 import React, { useState, useEffect } from 'react';
 import HealthPortal from './HealthPortal';
 import WealthPortal from './WealthPortal';
 import LoginScreen from './LoginScreen';
 import AdminDashboard from './AdminDashboard';
-import { Segment, UserProfile, AppSettings, Transaction, SupportTicket } from '../types';
-import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope, HelpCircle, MessageSquare, Plus, Upload } from 'lucide-react';
-import { getSettings, getTransactions, getNurseMessages, getTickets, addTicket, uploadMedia, updateUserProfile } from '../services/storageService';
+import { Segment, UserProfile, AppSettings } from '../types';
+import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope, LayoutDashboard, Upload, Unlock, HelpCircle, Plus, MessageSquare } from 'lucide-react';
+import { getSettings, getTransactions, getNurseMessages, getTickets, uploadMedia, updateUserProfile, addTicket } from '../services/storageService';
 import Button from './Button';
 
 const App: React.FC = () => {
   const [currentSegment, setCurrentSegment] = useState<Segment>(Segment.LOGIN);
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '' });
+  
+  // Admin Session State (For Impersonation)
+  const [adminSession, setAdminSession] = useState<UserProfile | null>(null);
 
-  // Profile Modal State
+  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '' });
   const [showProfile, setShowProfile] = useState(false);
   const [stats, setStats] = useState({ earnings: 0, spending: 0, activeRentals: 0, nurseLogs: 0 });
-  
+  const [isUploadingId, setIsUploadingId] = useState(false);
+
   // Ticket State in Profile
-  const [myTickets, setMyTickets] = useState<SupportTicket[]>([]);
+  const [myTickets, setMyTickets] = useState<any[]>([]);
   const [showTicketForm, setShowTicketForm] = useState(false);
   const [newTicket, setNewTicket] = useState<{type: 'complaint' | 'help' | 'return', subject: string, message: string}>({
       type: 'help', subject: '', message: ''
   });
 
-  // ID Upload State
-  const [isUploadingId, setIsUploadingId] = useState(false);
-
   useEffect(() => {
-    const initData = async () => {
+    const loadData = async () => {
         setSettings(await getSettings());
-        
+
         // Calculate General Profile Stats
         if (user) {
             const txs = await getTransactions();
@@ -53,13 +54,54 @@ const App: React.FC = () => {
             setMyTickets(tickets.filter(t => t.userId === user.id));
         }
     };
-    initData();
+    loadData();
   }, [currentSegment, user, showProfile]);
 
+  // GEOLOCATION TRACKING ON LOGIN
+  useEffect(() => {
+    if (user?.id) {
+       if ("geolocation" in navigator) {
+           navigator.geolocation.getCurrentPosition((position) => {
+               // Update state safely using functional update to avoid race conditions with other profile updates
+               setUser(prev => {
+                   if (!prev) return null;
+                   
+                   const updatedUser = {
+                       ...prev,
+                       lastLocation: {
+                           lat: position.coords.latitude,
+                           lng: position.coords.longitude,
+                           timestamp: new Date().toISOString()
+                       }
+                   };
+                   
+                   // Fire and forget DB update
+                   updateUserProfile(updatedUser).catch(err => console.error("Failed to update location", err));
+                   
+                   return updatedUser;
+               });
+           }, (err) => {
+               console.warn("Location permission denied or unavailable", err);
+           });
+       }
+    }
+  }, [user?.id]); // Only run when user ID changes (i.e., on login)
+
   const handleLogin = (loggedInUser: UserProfile) => {
+      // 1. Force Admin Role for the Owner - Add null check for email
+      if (loggedInUser.email && loggedInUser.email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com') {
+          loggedInUser.role = 'admin';
+          loggedInUser.verified = true;
+          loggedInUser.approvalStatus = 'approved';
+      }
+
       setUser(loggedInUser);
+      // Clear any previous admin session on new login
+      setAdminSession(null); 
+      
       if (loggedInUser.role === 'admin') {
-          setCurrentSegment(Segment.ADMIN);
+          // Default to LANDING for better flow, allowing Admin to use the app first
+          setCurrentSegment(Segment.LANDING);
       } else if (loggedInUser.role === 'nurse') {
           setCurrentSegment(Segment.HEALTH);
       } else {
@@ -73,12 +115,14 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
       setUser(null);
+      setAdminSession(null);
       setCurrentSegment(Segment.LOGIN);
       setShowProfile(false);
   };
 
   // Switch contexts
   const handleSwitchToUserView = () => {
+      // Just change the view, keep user as Admin
       setCurrentSegment(Segment.LANDING);
   };
 
@@ -91,8 +135,17 @@ const App: React.FC = () => {
   };
 
   const handleImpersonateUser = (targetUser: UserProfile) => {
-      setUser(targetUser);
+      setAdminSession(user); // Save the real admin
+      setUser(targetUser);   // Switch to target user
       setCurrentSegment(Segment.LANDING);
+  };
+
+  const handleStopImpersonation = () => {
+      if (adminSession) {
+          setUser(adminSession);
+          setAdminSession(null);
+          setCurrentSegment(Segment.ADMIN);
+      }
   };
 
   const handleUploadId = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,7 +154,7 @@ const App: React.FC = () => {
       
       setIsUploadingId(true);
       const url = await uploadMedia(file);
-      const updated = { ...user, idDocumentUrl: url, verified: true };
+      const updated = { ...user, idDocumentFront: url, verified: true };
       await updateUserProfile(updated);
       setUser(updated);
       setIsUploadingId(false);
@@ -152,12 +205,14 @@ const App: React.FC = () => {
       </div>
   );
 
-  if (currentSegment === Segment.LOGIN) {
+  // --- RENDER LOGIC ---
+
+  if (!user) {
       return <LoginScreen onLogin={handleLogin} logoUrl={settings.logoUrl} />;
   }
 
-  // CORRECTED: Pass required props to AdminDashboard
-  if (currentSegment === Segment.ADMIN && user?.role === 'admin') {
+  // STRICT ADMIN VIEW: If role is admin OR administrator, show Admin Dashboard.
+  if ((user.role === 'admin' || user.role === 'administrator') && currentSegment === Segment.ADMIN) {
       return (
         <AdminDashboard 
             user={user} 
@@ -168,6 +223,7 @@ const App: React.FC = () => {
       );
   }
 
+  // NURSE VIEW
   if (currentSegment === Segment.HEALTH) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -177,6 +233,7 @@ const App: React.FC = () => {
     );
   }
 
+  // WEALTH PORTAL
   if (currentSegment === Segment.WEALTH && user) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -191,13 +248,39 @@ const App: React.FC = () => {
     );
   }
 
+  // USER LANDING PAGE (DEFAULT)
   return (
     <div className="min-h-screen flex flex-col md:flex-row font-sans overflow-hidden relative">
       
       <BrandHeader />
 
+      {/* --- FAILSAFE ADMIN BUTTON --- */}
+      {/* This button ONLY appears for the owner email if they are on the landing page */}
+      {/* ADDED NULL CHECK FOR user.email */}
+      {user.email && user.email.toLowerCase() === 'davidsonotienoomondi91@gmail.com' && (
+          <button 
+              onClick={() => setCurrentSegment(Segment.ADMIN)}
+              className="fixed bottom-6 right-6 z-[100] bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-full font-bold shadow-2xl flex items-center gap-2 animate-bounce hover:animate-none border-4 border-white/50"
+          >
+              <ShieldCheck size={20} />
+              ADMIN DASHBOARD
+          </button>
+      )}
+
       {/* Top Right Controls */}
       <div className="fixed top-4 right-4 md:top-6 md:right-6 z-50 flex items-center gap-3">
+        
+        {/* Admin Return Button - Shows if Admin is viewing as user OR Impersonating */}
+        {(user?.role === 'admin' || adminSession) && (
+            <button 
+                onClick={adminSession ? handleStopImpersonation : handleSwitchToAdminPanel}
+                className={`${adminSession ? 'bg-amber-600 border-amber-500' : 'bg-indigo-600 border-indigo-500'} text-white hover:opacity-90 px-4 py-2 rounded-full shadow-lg border text-xs font-bold flex items-center gap-2 transition-transform hover:scale-105`}
+            >
+                {adminSession ? <Unlock size={14} /> : <LayoutDashboard size={14} />} 
+                {adminSession ? "EXIT IMPERSONATION" : "ADMIN DASHBOARD"}
+            </button>
+        )}
+        
         {user && (
             <button 
                 onClick={() => setShowProfile(true)}
@@ -264,8 +347,8 @@ const App: React.FC = () => {
                                               {user.verified ? 'Verified Citizen (KYC Passed)' : 'Pending Verification'}
                                           </div>
                                       </div>
-                                      {user.idDocumentUrl ? (
-                                          <a href={user.idDocumentUrl} target="_blank" rel="noreferrer" className="text-xs bg-slate-200 px-3 py-1 rounded-full text-slate-600 hover:bg-slate-300 font-bold flex items-center gap-1">
+                                      {user.idDocumentFront ? (
+                                          <a href={user.idDocumentFront} target="_blank" rel="noreferrer" className="text-xs bg-slate-200 px-3 py-1 rounded-full text-slate-600 hover:bg-slate-300 font-bold flex items-center gap-1">
                                               <FileText size={12}/> View ID Doc
                                           </a>
                                       ) : (
@@ -371,8 +454,25 @@ const App: React.FC = () => {
                       </section>
                   </div>
                   
-                  <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end">
-                      <button onClick={() => setShowProfile(false)} className="px-6 py-2 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800">Close Profile</button>
+                  <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+                      {/* Admin CTR Button */}
+                      {(user.role === 'admin' || adminSession) && (
+                          <button 
+                              onClick={() => {
+                                  setShowProfile(false);
+                                  if (adminSession) {
+                                      handleStopImpersonation();
+                                  } else {
+                                      handleSwitchToAdminPanel();
+                                  }
+                              }}
+                              className="px-4 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center gap-2 transition-colors shadow-md"
+                          >
+                              <LayoutDashboard size={16} />
+                              go to CTR panel
+                          </button>
+                      )}
+                      <button onClick={() => setShowProfile(false)} className="px-6 py-2 bg-slate-200 text-slate-800 font-bold rounded-lg hover:bg-slate-300">Close Profile</button>
                   </div>
               </div>
           </div>

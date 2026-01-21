@@ -7,7 +7,7 @@ export enum Segment {
   LOGIN = 'LOGIN'
 }
 
-export type UserRole = 'admin' | 'nurse' | 'user';
+export type UserRole = 'admin' | 'nurse' | 'user' | 'administrator';
 
 export interface UserProfile {
   id: string;
@@ -66,12 +66,18 @@ export interface Transaction {
   assetName: string;
   renterId: string;
   renterName: string;
-  startDate: string;
+  startDate: string; // Used as Delivery Date for Shop Orders
   endDate?: string;
   totalCost: number;
   status: 'active' | 'returned' | 'disputed' | 'pending_approval' | 'in_transit' | 'delivered';
   depositHeld: boolean;
   ownerId?: string; 
+  deliveryLocation?: {
+    lat: number;
+    lng: number;
+    accuracy: number;
+  };
+  deliveryNotes?: string; // Used for specific time instructions or landmark
 }
 
 export interface SupportTicket {

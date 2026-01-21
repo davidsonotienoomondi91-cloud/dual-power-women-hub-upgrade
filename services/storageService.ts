@@ -1,12 +1,18 @@
 
 import { Asset, Transaction, UserProfile, AppSettings, ChatMessage, Product, UserRole, SupportTicket } from '../types';
 
-// JSONBin Configuration
-const BIN_ID = "6949350743b1c97be9fe7467";
-const MASTER_KEY = "$2a$10$4e5y5TVrOfDDryzmJUUigerMTAI8.n5JDP4.vwU/pGhQGz7x7gAme";
-const API_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+// --- CONFIGURATION ---
+const JSONBIN_BIN_ID = "6949350743b1c97be9fe7467";
+const JSONBIN_API_KEY = "$2a$10$4e5y5TVrOfDDryzmJUUigerMTAI8.n5JDP4.vwU/pGhQGz7x7gAme";
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
-interface DatabaseSchema {
+const CLOUDINARY_CLOUD_NAME = "dwvjtjmxo";
+const CLOUDINARY_UPLOAD_PRESET = "dualpower_upload"; 
+// Note: API Key (541182386814422) and Secret are typically used for server-side signing. 
+// For this client-side demo, we use the unsigned upload preset.
+
+// --- TYPES ---
+interface DbSchema {
   users: UserProfile[];
   assets: Asset[];
   transactions: Transaction[];
@@ -16,8 +22,7 @@ interface DatabaseSchema {
   settings: AppSettings;
 }
 
-// Initial Empty State
-const INITIAL_DB: DatabaseSchema = {
+const DEFAULT_DB: DbSchema = {
   users: [],
   assets: [],
   transactions: [],
@@ -27,150 +32,185 @@ const INITIAL_DB: DatabaseSchema = {
   settings: { orgName: 'Dual Power Women Hub', logoUrl: '' }
 };
 
-// --- CORE DATABASE FUNCTIONS ---
+// --- CORE STORAGE ENGINE ---
 
-/**
- * Fetches the entire database from JSONBin.
- */
-const fetchDB = async (): Promise<DatabaseSchema> => {
-  try {
-    const response = await fetch(API_URL, {
-      method: 'GET',
-      headers: {
-        'X-Master-Key': MASTER_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
+// In-memory cache to reduce API calls
+let dbCache: DbSchema | null = null;
+let lastFetch = 0;
+const CACHE_TTL = 2000; // 2 seconds cache to prevent spamming
 
-    if (!response.ok) {
-        throw new Error('Failed to fetch DB');
+const fetchDb = async (): Promise<DbSchema> => {
+    const now = Date.now();
+    if (dbCache && (now - lastFetch < CACHE_TTL)) {
+        return dbCache;
     }
 
-    const json = await response.json();
-    const record = json.record as Partial<DatabaseSchema>;
-    
-    // Merge with initial structure to ensure all arrays exist
-    return { ...INITIAL_DB, ...record };
-  } catch (error) {
-    console.error("DB Fetch Error:", error);
-    return INITIAL_DB;
-  }
+    try {
+        const response = await fetch(JSONBIN_URL, {
+            headers: {
+                'X-Master-Key': JSONBIN_API_KEY,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            console.warn("JSONBin Fetch Error:", response.statusText);
+            // If bin is empty or new, return default
+            return dbCache || DEFAULT_DB;
+        }
+
+        const data = await response.json();
+        // JSONBin V3 returns data in `record` field
+        const record = data.record || DEFAULT_DB;
+        
+        // Merge with default to ensure all collections exist
+        dbCache = { ...DEFAULT_DB, ...record };
+        lastFetch = now;
+        return dbCache as DbSchema;
+    } catch (e) {
+        console.error("Storage Read Error:", e);
+        return dbCache || DEFAULT_DB;
+    }
 };
 
-/**
- * Saves the entire database to JSONBin.
- */
-const saveDB = async (data: DatabaseSchema): Promise<boolean> => {
-  try {
-    const response = await fetch(API_URL, {
-      method: 'PUT',
-      headers: {
-        'X-Master-Key': MASTER_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
-    });
-    return response.ok;
-  } catch (error) {
-    console.error("DB Save Error:", error);
-    return false;
-  }
+const saveDb = async (newData: DbSchema): Promise<boolean> => {
+    // Optimistic update
+    dbCache = newData;
+    lastFetch = Date.now();
+
+    try {
+        const response = await fetch(JSONBIN_URL, {
+            method: 'PUT',
+            headers: {
+                'X-Master-Key': JSONBIN_API_KEY,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(newData)
+        });
+        return response.ok;
+    } catch (e) {
+        console.error("Storage Write Error:", e);
+        return false;
+    }
 };
 
 // --- AUTH SERVICES ---
 
-export const loginUser = async (email: string, password: string): Promise<UserProfile | string | null> => {
-  try {
-    const db = await fetchDB();
-    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-
-    if (user) {
-       // In a real app, passwords should be hashed. Here we compare directly for simplicity.
-       // @ts-ignore - Assuming password is stored in the object even if not in type
-       if (user.password === password) {
-           if (user.approvalStatus === 'pending' || user.approvalStatus === 'rejected') {
-               return "Your account is pending Admin approval. Please contact support.";
-           }
-           const { password: _, ...safeUser } = user as any;
-           return safeUser;
-       }
-       return null;
-    }
-
-    // Admin Recovery Backdoor (Seeding)
-    if (email === 'davidsonotienoomondi91@gmail.com' && password === 'Rongo@20231234567890') {
-        const adminUser = {
-            id: 'admin_recovery',
+export const getUserById = async (userId: string): Promise<UserProfile | null> => {
+    // 1. Hardcoded Admin Check
+    if (userId === 'admin_master_001') {
+        return {
+            id: 'admin_master_001',
             name: 'Davidson Otieno Omondi',
-            email: email,
+            email: 'davidsonotienoomondi91@gmail.com',
             phone: '0716602552',
-            role: 'admin' as UserRole,
+            role: 'admin',
             verified: true,
-            approvalStatus: 'approved' as const,
-            password: password
+            approvalStatus: 'approved'
         };
-        db.users.push(adminUser as any);
-        await saveDB(db);
-        const { password: _, ...safeAdmin } = adminUser;
-        return safeAdmin as UserProfile;
     }
 
-    return null;
-  } catch (error) {
-    return "Connection Error";
-  }
+    const db = await fetchDb();
+    return db.users.find(u => u.id === userId) || null;
+};
+
+export const loginUser = async (email: string, password: string): Promise<UserProfile | string | null> => {
+    try {
+        // 1. Hardcoded Admin Check
+        if (email && email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com' && password === 'Rongo@20231234567890') {
+            return {
+                id: 'admin_master_001',
+                name: 'Davidson Otieno Omondi',
+                email: 'davidsonotienoomondi91@gmail.com',
+                phone: '0716602552',
+                role: 'admin',
+                verified: true,
+                approvalStatus: 'approved'
+            };
+        }
+
+        const db = await fetchDb();
+        const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+
+        if (user) {
+            // In a real app, verify hash. Here we compare plain text for demo.
+            // @ts-ignore - Assuming password exists on stored object
+            if (user.password === password) {
+                 if (user.approvalStatus === 'pending' || user.approvalStatus === 'rejected') {
+                     return "Your account is pending Admin approval. Please contact support.";
+                 }
+                 // Remove password before returning
+                 const { password: _, ...safeUser } = user as any;
+                 return safeUser as UserProfile;
+            }
+            return null;
+        }
+        return null;
+    } catch (error) {
+        console.error(error);
+        return "Connection Error. Please check your internet.";
+    }
 };
 
 export const registerUser = async (data: { name: string; email: string; phone: string; password: string }): Promise<UserProfile | string> => {
-  const db = await fetchDB();
-  
-  if (db.users.some(u => u.email.toLowerCase() === data.email.toLowerCase())) {
-      return "Email already exists.";
-  }
+    try {
+        const db = await fetchDb();
+        
+        if (db.users.some(u => u.email.toLowerCase() === data.email.toLowerCase())) return "Email already exists.";
+        if (db.users.some(u => u.phone === data.phone)) return "Phone number already exists.";
 
-  const newUser = {
-      id: Date.now().toString(),
-      name: data.name,
-      email: data.email.toLowerCase(),
-      phone: data.phone,
-      password: data.password, // Stored securely in real apps
-      role: 'user' as const,
-      verified: false,
-      approvalStatus: 'pending' as const
-  };
+        const newId = Date.now().toString();
+        const newUser = {
+            id: newId,
+            name: data.name,
+            email: data.email.toLowerCase(),
+            phone: data.phone,
+            password: data.password, // Stored for demo purposes
+            role: 'user' as const,
+            verified: false,
+            approvalStatus: 'pending' as const
+        };
 
-  db.users.push(newUser as any);
-  await saveDB(db);
+        db.users.push(newUser);
+        await saveDb(db);
 
-  return "Account created! Please wait for Admin approval.";
-};
-
-export const resetUserPassword = async (email: string, phone: string, newPassword: string): Promise<boolean> => {
-  const db = await fetchDB();
-  const userIndex = db.users.findIndex(u => u.email.toLowerCase() === email.toLowerCase() && u.phone === phone);
-  
-  if (userIndex !== -1) {
-      (db.users[userIndex] as any).password = newPassword;
-      await saveDB(db);
-      return true;
-  }
-  return false;
-};
-
-export const updateUserProfile = async (updatedUser: UserProfile): Promise<void> => {
-    const db = await fetchDB();
-    const index = db.users.findIndex(u => u.id === updatedUser.id);
-    if (index !== -1) {
-        // Preserve password
-        const password = (db.users[index] as any).password;
-        db.users[index] = { ...updatedUser, password } as any;
-        await saveDB(db);
+        const { password, ...safeUser } = newUser;
+        return safeUser as UserProfile;
+    } catch (e) {
+        return "Registration Failed. Please try again.";
     }
 };
 
-// Admin Functions
+export const resetUserPassword = async (email: string, phone: string, newPassword: string): Promise<boolean> => {
+    if (email === 'davidsonotienoomondi91@gmail.com') {
+        if (phone !== '0716602552') return false; 
+    }
+
+    const db = await fetchDb();
+    const userIndex = db.users.findIndex(u => u.email.toLowerCase() === email.toLowerCase() && u.phone === phone);
+    
+    if (userIndex >= 0) {
+        // @ts-ignore
+        db.users[userIndex].password = newPassword;
+        await saveDb(db);
+        return true;
+    }
+    return false;
+};
+
+export const updateUserProfile = async (updatedUser: UserProfile): Promise<void> => {
+    const db = await fetchDb();
+    const index = db.users.findIndex(u => u.id === updatedUser.id);
+    if (index >= 0) {
+        // Preserve password which isn't in UserProfile type
+        const existing = db.users[index];
+        db.users[index] = { ...existing, ...updatedUser };
+        await saveDb(db);
+    }
+};
+
 export const getAllUsers = async (): Promise<UserProfile[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return db.users.map(u => {
         const { password, ...safe } = u as any;
         return safe as UserProfile;
@@ -178,130 +218,162 @@ export const getAllUsers = async (): Promise<UserProfile[]> => {
 };
 
 export const updateUserStatus = async (userId: string, status: 'approved' | 'rejected') => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.users.findIndex(u => u.id === userId);
-    if (index !== -1) {
+    if (index >= 0) {
         db.users[index].approvalStatus = status;
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
 export const updateUserRole = async (userId: string, role: UserRole) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.users.findIndex(u => u.id === userId);
-    if (index !== -1) {
+    if (index >= 0) {
         db.users[index].role = role;
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
-// --- HEALTH & NURSE SERVICES ---
+// --- HEALTH SERVICES ---
 
 export const getNurseMessages = async (): Promise<ChatMessage[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return db.nurse_messages || [];
 };
 
 export const saveNurseMessage = async (msg: ChatMessage) => {
-    const db = await fetchDB();
-    if (!db.nurse_messages) db.nurse_messages = [];
+    const db = await fetchDb();
     db.nurse_messages.push(msg);
-    await saveDB(db);
+    await saveDb(db);
 };
 
 export const deleteNurseMessage = async (msgId: string) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     db.nurse_messages = db.nurse_messages.filter(m => m.id !== msgId);
-    await saveDB(db);
+    await saveDb(db);
 };
 
-// --- PHARMACY / SHOP SERVICES ---
+// --- SHOP SERVICES ---
 
 export const getProducts = async (): Promise<Product[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return db.products || [];
 };
 
 export const saveProduct = async (product: Product) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.products.findIndex(p => p.id === product.id);
-    if (index !== -1) {
+    if (index >= 0) {
         db.products[index] = product;
     } else {
         db.products.push(product);
     }
-    await saveDB(db);
+    await saveDb(db);
 };
 
 export const deleteProduct = async (id: string) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     db.products = db.products.filter(p => p.id !== id);
-    await saveDB(db);
+    await saveDb(db);
 };
 
-// --- ASSET & ACCOUNTING SERVICES ---
+// --- ASSETS & TRANSACTIONS ---
 
 export const getAssets = async (): Promise<Asset[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return db.assets || [];
 };
 
 export const addAsset = async (asset: Asset): Promise<void> => {
-    const db = await fetchDB();
-    const newAsset = { ...asset, moderationStatus: asset.moderationStatus || 'pending' };
-    db.assets.push(newAsset);
-    await saveDB(db);
+    const db = await fetchDb();
+    db.assets.push(asset);
+    await saveDb(db);
 };
 
 export const updateAsset = async (updatedAsset: Asset): Promise<void> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.assets.findIndex(a => a.id === updatedAsset.id);
-    if (index !== -1) {
+    if (index >= 0) {
         db.assets[index] = updatedAsset;
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
 export const updateAssetStatus = async (id: string, status: 'approved' | 'rejected', reason?: string): Promise<void> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.assets.findIndex(a => a.id === id);
-    if (index !== -1) {
+    if (index >= 0) {
         db.assets[index].moderationStatus = status;
         if (status === 'rejected') db.assets[index].rejectionReason = reason;
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
 export const deleteAsset = async (id: string) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     db.assets = db.assets.filter(a => a.id !== id);
-    await saveDB(db);
+    await saveDb(db);
 };
 
 export const getTransactions = async (): Promise<Transaction[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return (db.transactions || []).sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
 };
 
-export const rentAsset = async (assetId: string, renter: UserProfile, days: number): Promise<void> => {
-    const db = await fetchDB();
+export const createShopOrder = async (product: Product, buyer: UserProfile, deliveryDate: string, location: {lat: number, lng: number, accuracy: number}): Promise<void> => {
+    const db = await fetchDb();
+    
+    // Update Stock
+    const pIndex = db.products.findIndex(p => p.id === product.id);
+    if (pIndex >= 0 && db.products[pIndex].stock > 0) {
+        db.products[pIndex].stock -= 1;
+    }
+
+    const txId = Date.now().toString();
+    const tx: Transaction = {
+        id: txId,
+        assetId: product.id,
+        assetName: product.name,
+        renterId: buyer.id,
+        renterName: buyer.name,
+        startDate: deliveryDate,
+        totalCost: product.price,
+        status: 'pending_approval',
+        depositHeld: false,
+        ownerId: 'SYSTEM_SHOP',
+        deliveryLocation: location,
+        deliveryNotes: 'Standard Shop Delivery'
+    };
+
+    db.transactions.push(tx);
+    await saveDb(db);
+};
+
+export const rentAsset = async (
+    assetId: string, 
+    renter: UserProfile, 
+    days: number, 
+    location: {lat: number, lng: number, accuracy: number}
+): Promise<void> => {
+    const db = await fetchDb();
     const assetIndex = db.assets.findIndex(a => a.id === assetId);
 
-    if (assetIndex !== -1 && db.assets[assetIndex].status === 'available') {
-        // 1. Update Asset
+    if (assetIndex >= 0 && db.assets[assetIndex].status === 'available') {
+        // Update Asset
         db.assets[assetIndex].status = 'rented';
 
-        // 2. Calc
+        const assetData = db.assets[assetIndex];
         const startDate = new Date();
         const endDate = new Date();
         endDate.setDate(startDate.getDate() + days);
-        const totalCost = db.assets[assetIndex].dailyRate * days;
+        const totalCost = assetData.dailyRate * days;
 
-        // 3. Create Tx
+        const txId = Date.now().toString();
         const tx: Transaction = {
-            id: Date.now().toString(),
-            assetId: db.assets[assetIndex].id,
-            assetName: db.assets[assetIndex].name,
+            id: txId,
+            assetId: assetData.id,
+            assetName: assetData.name,
             renterId: renter.id,
             renterName: renter.name,
             startDate: startDate.toISOString(),
@@ -309,19 +381,21 @@ export const rentAsset = async (assetId: string, renter: UserProfile, days: numb
             totalCost: totalCost,
             status: 'pending_approval',
             depositHeld: true,
-            ownerId: db.assets[assetIndex].ownerId
+            ownerId: assetData.ownerId,
+            deliveryLocation: location,
+            deliveryNotes: 'Asset Rental Delivery'
         };
+
         db.transactions.push(tx);
-        
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
 export const updateTransactionStatus = async (txId: string, status: Transaction['status']) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.transactions.findIndex(t => t.id === txId);
     
-    if (index !== -1) {
+    if (index >= 0) {
         db.transactions[index].status = status;
         
         if (status === 'returned') {
@@ -330,12 +404,12 @@ export const updateTransactionStatus = async (txId: string, status: Transaction[
             
             // Free the asset
             const assetId = db.transactions[index].assetId;
-            const assetIndex = db.assets.findIndex(a => a.id === assetId);
-            if (assetIndex !== -1) {
-                db.assets[assetIndex].status = 'available';
+            const aIndex = db.assets.findIndex(a => a.id === assetId);
+            if (aIndex >= 0) {
+                db.assets[aIndex].status = 'available';
             }
         }
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
@@ -343,75 +417,63 @@ export const returnAsset = async (txId: string): Promise<void> => {
     await updateTransactionStatus(txId, 'returned');
 };
 
-// --- SUPPORT TICKETS ---
+// --- TICKETS ---
 
 export const getTickets = async (): Promise<SupportTicket[]> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return (db.tickets || []).sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 };
 
 export const addTicket = async (ticket: SupportTicket) => {
-    const db = await fetchDB();
-    if (!db.tickets) db.tickets = [];
+    const db = await fetchDb();
     db.tickets.push(ticket);
-    await saveDB(db);
+    await saveDb(db);
 };
 
 export const updateTicket = async (updated: SupportTicket) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     const index = db.tickets.findIndex(t => t.id === updated.id);
-    if (index !== -1) {
+    if (index >= 0) {
         db.tickets[index] = updated;
-        await saveDB(db);
+        await saveDb(db);
     }
 };
 
 // --- SETTINGS ---
 
 export const saveSettings = async (settings: AppSettings) => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     db.settings = settings;
-    await saveDB(db);
+    await saveDb(db);
 };
 
 export const getSettings = async (): Promise<AppSettings> => {
-    const db = await fetchDB();
+    const db = await fetchDb();
     return db.settings || { orgName: 'Dual Power Women Hub', logoUrl: '' };
 };
 
 // --- MEDIA (Cloudinary) ---
 
 export const uploadMedia = async (file: File): Promise<string> => {
-  // Use provided cloud name default or env var
-  // @ts-ignore
-  const cloudName = (import.meta as any).env.VITE_CLOUDINARY_CLOUD_NAME || "dwvjtjmxo";
-  // @ts-ignore
-  const uploadPreset = (import.meta as any).env.VITE_CLOUDINARY_UPLOAD_PRESET || "dualpower_upload";
+  // Use the explicitly provided Cloudinary Cloud Name
+  const cloudName = CLOUDINARY_CLOUD_NAME;
+  const uploadPreset = CLOUDINARY_UPLOAD_PRESET;
 
-  if (cloudName && uploadPreset) {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('upload_preset', uploadPreset);
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('upload_preset', uploadPreset);
 
-    try {
-      // CHANGED: Use /auto/upload to handle both images and videos
-      const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-      return data.secure_url;
-    } catch (error) {
-      console.error("Cloudinary upload failed:", error);
-      return URL.createObjectURL(file); // Fallback for testing/offline
-    }
-  } else {
-    // Local fallback
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
+  try {
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+      method: 'POST',
+      body: formData,
     });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.secure_url;
+  } catch (error) {
+    console.error("Cloudinary upload failed:", error);
+    // Fallback for offline testing
+    return URL.createObjectURL(file);
   }
 };
