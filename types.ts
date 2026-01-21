@@ -105,4 +105,5 @@ export interface GeoLocation {
 export interface AppSettings {
   logoUrl?: string;
   orgName: string;
+  geminiApiKey?: string;
 }

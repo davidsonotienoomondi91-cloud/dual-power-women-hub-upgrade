@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getTransactions, saveSettings, getSettings, uploadMedia, updateAssetStatus, getAllUsers, updateUserStatus, updateTransactionStatus, getNurseMessages, deleteNurseMessage, getProducts, saveProduct, updateAsset, updateUserRole, deleteAsset, getTickets, updateTicket, getAssets } from '../services/storageService';
 import { Transaction, AppSettings, Asset, UserProfile, ChatMessage, Product, SupportTicket } from '../types';
-import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, Truck, CheckCircle, XCircle, AlertCircle, DollarSign, Edit3, Trash2, Info, RefreshCw, PackageCheck, FileText, MapPin, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Users, Activity, MessageSquare, Settings, LogOut, Menu, Truck, CheckCircle, XCircle, AlertCircle, DollarSign, Edit3, Trash2, Info, RefreshCw, PackageCheck, FileText, MapPin, ExternalLink, Key } from 'lucide-react';
 import Button from './Button';
 
 interface AdminDashboardProps {
@@ -25,7 +25,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
   const [nurseLogs, setNurseLogs] = useState<ChatMessage[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
-  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '' });
+  const [settings, setSettings] = useState<AppSettings>({ orgName: '', logoUrl: '', geminiApiKey: '' });
 
   // Modal & Form States
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
@@ -629,6 +629,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
                                         className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                                     />
                                 </div>
+                                
+                                <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+                                    <label className="block text-sm font-bold text-indigo-900 mb-2 flex items-center gap-2">
+                                        <Key size={16}/> Gemini API Key (Enterprise)
+                                    </label>
+                                    <div className="relative">
+                                        <input 
+                                            type="password"
+                                            value={settings.geminiApiKey || ''}
+                                            onChange={(e) => setSettings({...settings, geminiApiKey: e.target.value})}
+                                            className="w-full border border-indigo-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none pr-10 bg-white"
+                                            placeholder="AIzaSy..."
+                                        />
+                                        <div className="absolute right-3 top-3.5 text-indigo-300">
+                                            <Key size={14}/>
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] text-indigo-700 mt-2">
+                                        <span className="font-bold">Deployment Fix:</span> Enter your key here to ensure AI components work on deployed versions where env vars are missing.
+                                    </p>
+                                </div>
+
                                 <div>
                                     <label className="block text-sm font-bold text-slate-700 mb-2">Logo Upload</label>
                                     <div className="flex items-center gap-4">

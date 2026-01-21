@@ -1,9 +1,34 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { GroundingSource, GeoLocation } from "../types";
+import { getSettings } from "./storageService";
 
-// Helper to get AI instance.
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Hardcoded fallback key provided for deployment stability
+const FALLBACK_API_KEY = "AIzaSyCloJjKarKbYjvYoMw-uJl9hcKRDJqcNuw";
+
+// Helper to get AI instance with dynamic key resolution
+const getAI = async () => {
+  // 1. Try to get key from DB Settings (Admin Configured) - this takes precedence
+  try {
+    const settings = await getSettings();
+    if (settings.geminiApiKey && settings.geminiApiKey.length > 10) {
+       return { 
+           ai: new GoogleGenAI({ apiKey: settings.geminiApiKey }),
+           key: settings.geminiApiKey
+       };
+    }
+  } catch (e) {
+    console.warn("Failed to fetch settings for API key");
+  }
+
+  // 2. Fallback to Environment Variable or Hardcoded Key
+  const envKey = process.env.API_KEY || FALLBACK_API_KEY;
+  
+  return { 
+      ai: new GoogleGenAI({ apiKey: envKey }),
+      key: envKey
+  };
+};
 
 /**
  * Health Segment: Chatbot with Medical Context & Search Grounding
@@ -13,7 +38,7 @@ export const getHealthAdvice = async (
   currentMessage: string,
   isNurseMode: boolean = false
 ): Promise<{ text: string; sources: GroundingSource[]; isEscalated: boolean }> => {
-  const ai = getAI();
+  const { ai } = await getAI();
   
   const escalationKeywords = ['bleeding', 'emergency', 'pain', 'suicide', 'severe', 'pregnant', 'miscarriage', 'lump', 'fever', 'blood', 'hurt', 'sick', 'hospital'];
   const shouldEscalate = isNurseMode || escalationKeywords.some(k => currentMessage.toLowerCase().includes(k));
@@ -27,8 +52,6 @@ export const getHealthAdvice = async (
   const systemInstruction = shouldEscalate ? nurseInstruction : friendInstruction;
 
   try {
-    // Optimization: Use Flash for general chat to improve connection speed, only use Pro for severe medical escalation if needed.
-    // However, user reported connection issues, so defaulting to Flash for reliability is safer.
     const primaryModel = 'gemini-3-flash-preview'; 
     
     const response = await ai.models.generateContent({
@@ -69,7 +92,7 @@ export const getHealthAdvice = async (
  * Wealth Segment: Analyze Asset Image for Auto-Fill
  */
 export const analyzeAsset = async (base64Image: string): Promise<string> => {
-  const ai = getAI();
+  const { ai } = await getAI();
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview', // FAST MODEL
@@ -92,7 +115,7 @@ export const analyzeAsset = async (base64Image: string): Promise<string> => {
  * Checks if the 5+ images actually match the provided title.
  */
 export const validateAssetImages = async (images: string[], title: string): Promise<{ valid: boolean; reason?: string }> => {
-  const ai = getAI();
+  const { ai } = await getAI();
   try {
     // We send up to 5 images for validation to save tokens/bandwidth
     const parts: any[] = images.slice(0, 5).map(img => ({
@@ -129,7 +152,7 @@ export const validateAssetImages = async (images: string[], title: string): Prom
  * SECURITY: Validate Kenyan ID (Front & Back)
  */
 export const validateKenyanID = async (frontImage: string, backImage: string): Promise<{ valid: boolean; reason?: string }> => {
-    const ai = getAI();
+    const { ai } = await getAI();
     try {
         const parts = [
             { inlineData: { mimeType: 'image/jpeg', data: frontImage.split(',')[1] || frontImage } },
@@ -163,7 +186,7 @@ export const validateKenyanID = async (frontImage: string, backImage: string): P
 };
 
 export const editAssetImage = async (base64Image: string, prompt: string): Promise<string | null> => {
-  const ai = getAI();
+  const { ai } = await getAI();
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
@@ -189,7 +212,7 @@ export const editAssetImage = async (base64Image: string, prompt: string): Promi
 };
 
 export const findLocalSuppliers = async (query: string, location: GeoLocation): Promise<{text: string, chunks: any[]}> => {
-  const ai = getAI();
+  const { ai } = await getAI();
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -209,10 +232,17 @@ export const findLocalSuppliers = async (query: string, location: GeoLocation): 
 };
 
 export const generateMarketingVideo = async (prompt: string, imageBytes?: string): Promise<string | null> => {
-  const ai = getAI();
+  const { ai, key } = await getAI();
   try {
+    // Note: Veo often requires a paid key selected by user via window.aistudio
+    // However, if the Admin has provided a key in settings, we try to use that via the SDK.
     const win = window as any;
-    if (win.aistudio && !await win.aistudio.hasSelectedApiKey()) throw new Error("API Key not selected");
+    
+    // If we have a configured key from Admin settings or Hardcoded Fallback, we skip the user selection prompt.
+    // If no key is configured, we fall back to the prompt.
+    if (!key && win.aistudio && !await win.aistudio.hasSelectedApiKey()) {
+        throw new Error("API Key not selected");
+    }
 
     let operation;
     if (imageBytes) {
@@ -235,8 +265,11 @@ export const generateMarketingVideo = async (prompt: string, imageBytes?: string
       operation = await ai.operations.getVideosOperation({ operation: operation });
     }
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-    return videoUri ? `${videoUri}&key=${process.env.API_KEY}` : null;
+    
+    // Append the resolved key (Admin's key, Hardcoded, or User's env key)
+    return videoUri ? `${videoUri}&key=${key}` : null;
   } catch (error) {
+    console.error("Video Generation Error", error);
     return null;
   }
 };
