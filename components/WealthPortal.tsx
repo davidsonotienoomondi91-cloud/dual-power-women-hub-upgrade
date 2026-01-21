@@ -42,10 +42,14 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   const [sortOrder, setSortOrder] = useState<'newest' | 'price-asc' | 'price-desc'>('newest');
 
   useEffect(() => {
-    setAssets(getAssets());
-    const allTx = getTransactions();
-    setMyRentals(allTx.filter(t => t.renterId === user.id));
-    setMyTickets(getTickets().filter(t => t.userId === user.id));
+    const load = async () => {
+        setAssets(await getAssets());
+        const allTx = await getTransactions();
+        setMyRentals(allTx.filter(t => t.renterId === user.id));
+        const tickets = await getTickets();
+        setMyTickets(tickets.filter(t => t.userId === user.id));
+    };
+    load();
   }, [activeView, user.id, showTicketModal, selectedAssetForRent]);
 
   const filteredAssets = assets
@@ -59,8 +63,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   // My Listings (Created by me)
   const myListings = assets.filter(a => a.ownerId === user.id);
 
-  const allTx = getTransactions();
-  const myEarnings = allTx
+  const myEarnings = myRentals
     .filter(t => t.ownerId === user.id && t.status !== 'disputed' && t.status !== 'pending_approval')
     .reduce((sum, t) => sum + t.totalCost, 0);
   
@@ -101,7 +104,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           approvalStatus: 'pending' as const 
       };
       
-      updateUserProfile(updatedUser);
+      await updateUserProfile(updatedUser);
       onUpdateUser(updatedUser);
       setIsVerifyingId(false);
       setShowVerificationModal(false);
@@ -141,13 +144,20 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   };
 
   // NEW: Confirm Rent
-  const confirmRent = () => {
+  const confirmRent = async () => {
       if (selectedAssetForRent && rentDays > 0) {
           window.open('https://paywith.nobuk.africa/saacaxzyzb', '_blank');
-          alert(`PAYMENT INITIATED.\n\nYour money is currently ON HOLD until the order is marked complete.\n\nThe Admin and the Asset Owner have been notified of your request.`);
-          rentAsset(selectedAssetForRent.id, user, rentDays);
-          setAssets(getAssets());
+          alert(`PAYMENT SIMULATION:\n\nPlease complete payment of KES ${(selectedAssetForRent.dailyRate * rentDays).toLocaleString()} on the opened tab.`);
+          
+          await rentAsset(selectedAssetForRent.id, user, rentDays);
           setSelectedAssetForRent(null);
+          setRentDays(1);
+          
+          // Refresh data
+          setAssets(await getAssets());
+          const allTx = await getTransactions();
+          setMyRentals(allTx.filter(t => t.renterId === user.id));
+          onUpdateUser({ ...user }); 
           setActiveView('rentals');
       }
   };
@@ -204,8 +214,9 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           const duration = video.duration;
           setVideoDuration(duration);
           
-          if (duration < 15 || duration > 18) {
-              alert(`Video Duration Error!\n\nYour video is ${duration.toFixed(1)} seconds.\n\nRequirement: STRICTLY between 15 and 18 seconds showing you and the item.`);
+          // Relaxed constraint: 3s to 60s
+          if (duration < 3 || duration > 60) {
+              alert(`Video Duration Error!\n\nYour video is ${duration.toFixed(1)} seconds.\n\nRequirement: Between 3 and 60 seconds.`);
               setVideoProofFile(null);
               e.target.value = ''; // Clear input
           } else {
@@ -213,7 +224,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           }
       };
       // Explicitly cast to any to avoid type error
-      video.src = URL.createObjectURL(file as any);
+      video.src = URL.createObjectURL(file);
   };
 
   const handleClearImages = () => {
@@ -260,7 +271,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 
         // 2. Video Proof Check
         if (!videoProofFile) {
-            alert("MISSING PROOF: You must upload a proof of ownership video (15-18 seconds). This is required for security.");
+            alert("MISSING PROOF: You must upload a proof of ownership video. This is required for security.");
             return;
         }
 
@@ -297,7 +308,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
         const uploadedVideoUrl = await uploadMedia(videoProofFile);
 
         // 5. Submit Asset
-        addAsset({
+        await addAsset({
             id: Date.now().toString(), 
             name: formData.title, 
             description: formData.description, 
@@ -329,14 +340,15 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
      });
   };
 
-  const handleSubmitTicket = () => {
+  const handleSubmitTicket = async () => {
       if(!newTicket.subject || !newTicket.message) return;
-      addTicket({
+      await addTicket({
           id: Date.now().toString(), userId: user.id, userName: user.name, type: newTicket.type, subject: newTicket.subject, message: newTicket.message, status: 'pending', createdAt: new Date().toISOString()
       });
       setNewTicket({ type: 'help', subject: '', message: '' });
       setShowTicketModal(false);
-      setMyTickets(getTickets().filter(t => t.userId === user.id));
+      const tickets = await getTickets();
+      setMyTickets(tickets.filter(t => t.userId === user.id));
       alert("Ticket Submitted Successfully.");
   };
 
@@ -625,7 +637,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                         <Sparkles className="text-indigo-600" size={18} />
                         <h3 className="font-bold text-indigo-900 text-sm">AI Auto-Fill & Security Scan</h3>
                     </div>
-                    <p className="text-xs text-indigo-700 mb-4">Upload at least 5 images + 1 Proof Video (15s-18s).</p>
+                    <p className="text-xs text-indigo-700 mb-4">Upload at least 5 images + 1 Proof Video (3s - 60s).</p>
                     
                     <div className="flex flex-col gap-4">
                         <div className="flex gap-4 items-start overflow-x-auto pb-2">
@@ -651,7 +663,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                                 <label className="flex-1 cursor-pointer bg-white border border-slate-300 rounded-lg p-3 flex items-center justify-center gap-2 hover:bg-slate-50 transition-all">
                                     <VideoIcon size={16} className="text-indigo-600"/>
                                     <span className="text-xs font-bold text-slate-600">
-                                        {videoProofFile ? `Selected (${videoDuration.toFixed(1)}s)` : 'Upload Video (15s - 18s)'}
+                                        {videoProofFile ? `Selected (${videoDuration.toFixed(1)}s)` : 'Upload Video'}
                                     </span>
                                     <input type="file" className="hidden" accept="video/*" onChange={handleVideoSelect} />
                                 </label>
@@ -659,7 +671,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                             </div>
                             <p className="text-[10px] text-slate-500 mt-2">
                                 * Video must clearly show the item and proof of ownership. 
-                                <span className="font-bold text-indigo-600 ml-1">Strict Duration: 15 to 18 seconds.</span>
+                                <span className="font-bold text-indigo-600 ml-1">Accepting duration: 3 to 60 seconds.</span>
                             </p>
                         </div>
 
@@ -737,3 +749,4 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 };
 
 export default WealthPortal;
+    

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import HealthPortal from './HealthPortal';
 import WealthPortal from './WealthPortal';
@@ -29,26 +28,32 @@ const App: React.FC = () => {
   const [isUploadingId, setIsUploadingId] = useState(false);
 
   useEffect(() => {
-    setSettings(getSettings());
-
-    // Calculate General Profile Stats
-    if (user) {
-        const txs = getTransactions();
-        const earnings = txs
-            .filter(t => t.ownerId === user.id && t.status !== 'disputed' && t.status !== 'pending_approval')
-            .reduce((sum, t) => sum + t.totalCost, 0);
+    const initData = async () => {
+        setSettings(await getSettings());
         
-        const spending = txs
-            .filter(t => t.renterId === user.id)
-            .reduce((sum, t) => sum + t.totalCost, 0);
+        // Calculate General Profile Stats
+        if (user) {
+            const txs = await getTransactions();
+            const earnings = txs
+                .filter(t => t.ownerId === user.id && t.status !== 'disputed' && t.status !== 'pending_approval')
+                .reduce((sum, t) => sum + t.totalCost, 0);
+            
+            const spending = txs
+                .filter(t => t.renterId === user.id)
+                .reduce((sum, t) => sum + t.totalCost, 0);
 
-        const activeRentals = txs.filter(t => t.renterId === user.id && (t.status === 'active' || t.status === 'in_transit')).length;
-        
-        const nurseLogsCount = getNurseMessages().length;
+            const activeRentals = txs.filter(t => t.renterId === user.id && (t.status === 'active' || t.status === 'in_transit')).length;
+            
+            const msgs = await getNurseMessages();
+            const nurseLogsCount = msgs.length;
 
-        setStats({ earnings, spending, activeRentals, nurseLogs: nurseLogsCount });
-        setMyTickets(getTickets().filter(t => t.userId === user.id));
-    }
+            setStats({ earnings, spending, activeRentals, nurseLogs: nurseLogsCount });
+            
+            const tickets = await getTickets();
+            setMyTickets(tickets.filter(t => t.userId === user.id));
+        }
+    };
+    initData();
   }, [currentSegment, user, showProfile]);
 
   const handleLogin = (loggedInUser: UserProfile) => {
@@ -97,16 +102,16 @@ const App: React.FC = () => {
       setIsUploadingId(true);
       const url = await uploadMedia(file);
       const updated = { ...user, idDocumentUrl: url, verified: true };
-      updateUserProfile(updated);
+      await updateUserProfile(updated);
       setUser(updated);
       setIsUploadingId(false);
       alert("ID Uploaded. Verification Pending.");
   };
 
-  const handleSubmitTicket = () => {
+  const handleSubmitTicket = async () => {
       if(!user || !newTicket.subject || !newTicket.message) return;
       
-      addTicket({
+      await addTicket({
           id: Date.now().toString(),
           userId: user.id,
           userName: user.name,
@@ -119,7 +124,9 @@ const App: React.FC = () => {
       
       setNewTicket({ type: 'help', subject: '', message: '' });
       setShowTicketForm(false);
-      setMyTickets(getTickets().filter(t => t.userId === user.id));
+      
+      const tickets = await getTickets();
+      setMyTickets(tickets.filter(t => t.userId === user.id));
       alert("Ticket Submitted Successfully.");
   };
 
@@ -250,7 +257,7 @@ const App: React.FC = () => {
                                   <div className="font-medium text-slate-700 flex items-center gap-2"><Phone size={12}/> {user.phone}</div>
                               </div>
                               <div className="md:col-span-2 border-t border-slate-200 pt-4 mt-2">
-                                  <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                                  <div className="flex justify-between items-center">
                                       <div>
                                           <div className="text-xs text-slate-400">Verification Status</div>
                                           <div className={`font-bold text-sm ${user.verified ? 'text-emerald-600' : 'text-amber-600'}`}>

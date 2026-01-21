@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import HealthPortal from './components/HealthPortal';
 import WealthPortal from './components/WealthPortal';
@@ -18,25 +17,29 @@ const App: React.FC = () => {
   const [stats, setStats] = useState({ earnings: 0, spending: 0, activeRentals: 0, nurseLogs: 0 });
 
   useEffect(() => {
-    setSettings(getSettings());
+    const loadData = async () => {
+        setSettings(await getSettings());
 
-    // Calculate General Profile Stats
-    if (user) {
-        const txs = getTransactions();
-        const earnings = txs
-            .filter(t => t.ownerId === user.id && t.status !== 'disputed' && t.status !== 'pending_approval')
-            .reduce((sum, t) => sum + t.totalCost, 0);
-        
-        const spending = txs
-            .filter(t => t.renterId === user.id)
-            .reduce((sum, t) => sum + t.totalCost, 0);
+        // Calculate General Profile Stats
+        if (user) {
+            const txs = await getTransactions();
+            const earnings = txs
+                .filter(t => t.ownerId === user.id && t.status !== 'disputed' && t.status !== 'pending_approval')
+                .reduce((sum, t) => sum + t.totalCost, 0);
+            
+            const spending = txs
+                .filter(t => t.renterId === user.id)
+                .reduce((sum, t) => sum + t.totalCost, 0);
 
-        const activeRentals = txs.filter(t => t.renterId === user.id && (t.status === 'active' || t.status === 'in_transit')).length;
-        
-        const nurseLogsCount = getNurseMessages().length;
+            const activeRentals = txs.filter(t => t.renterId === user.id && (t.status === 'active' || t.status === 'in_transit')).length;
+            
+            const msgs = await getNurseMessages();
+            const nurseLogsCount = msgs.length;
 
-        setStats({ earnings, spending, activeRentals, nurseLogs: nurseLogsCount });
-    }
+            setStats({ earnings, spending, activeRentals, nurseLogs: nurseLogsCount });
+        }
+    };
+    loadData();
   }, [currentSegment, user]);
 
   const handleLogin = (loggedInUser: UserProfile) => {
