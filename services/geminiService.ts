@@ -125,23 +125,33 @@ export const getHealthAdvice = async (
 
   const systemInstruction = shouldEscalate ? nurseInstruction : friendInstruction;
 
+  // Helper to try generation with fallback
+  const generate = async (model: string) => {
+      return await ai.models.generateContent({
+        model: model,
+        contents: [
+          ...history
+              .filter(h => h.text && h.text.trim().length > 0)
+              .map(h => ({ role: h.role === 'nurse' ? 'model' : h.role, parts: [{ text: h.text }] })),
+          { role: 'user', parts: [{ text: currentMessage }] }
+        ],
+        config: {
+          systemInstruction: systemInstruction,
+          tools: shouldEscalate ? [] : [{ googleSearch: {} }],
+        }
+      });
+  };
+
   try {
-    const primaryModel = 'gemini-3-flash-preview'; 
-    
-    const response = await ai.models.generateContent({
-      model: primaryModel,
-      contents: [
-        ...history
-            .filter(h => h.text && h.text.trim().length > 0) // Filter out empty messages
-            .map(h => ({ role: h.role === 'nurse' ? 'model' : h.role, parts: [{ text: h.text }] })),
-        { role: 'user', parts: [{ text: currentMessage }] }
-      ],
-      config: {
-        systemInstruction: systemInstruction,
-        // Disable Google Search in escalation mode to focus on direct medical advice/instructions
-        tools: shouldEscalate ? [] : [{ googleSearch: {} }],
-      }
-    });
+    let response;
+    try {
+        // Try Primary Model
+        response = await generate('gemini-3-flash-preview');
+    } catch (primaryError) {
+        console.warn("Primary Model Failed, trying fallback 'gemini-2.5-flash'", primaryError);
+        // Fallback to older stable model
+        response = await generate('gemini-2.5-flash');
+    }
 
     const text = response.text || "I apologize, I could not process that request.";
     const sources: GroundingSource[] = [];
@@ -158,12 +168,11 @@ export const getHealthAdvice = async (
     return { text, sources, isEscalated: shouldEscalate };
 
   } catch (error: any) {
-    console.warn("Health AI Error:", error);
-    // Fallback response if API fails
+    console.error("Health AI Critical Error:", error);
     if (shouldEscalate) {
         return { text: "I am having trouble connecting, but your situation sounds serious. Please go to the nearest hospital immediately or call 112.", sources: [], isEscalated: true };
     }
-    return { text: "Network connection weak. Please call 0112241760 for immediate help.", sources: [], isEscalated: true };
+    return { text: "System is experiencing high traffic or key issues. Please try again in a moment.", sources: [], isEscalated: true };
   }
 };
 
@@ -334,25 +343,11 @@ export const findLocalSuppliers = async (query: string, location: GeoLocation): 
 export const generateMarketingVideo = async (prompt: string, imageBytes?: string): Promise<string | null> => {
   const { ai, key, isFallback } = await getAI();
   try {
-    // CRITICAL: Veo video generation REQUIRES a paid key. 
-    // If we are currently using the fallback key, we MUST force the user to select their own key.
-    // The fallback key does not have Veo quota.
-    
     const win = window as any;
-    
-    // Check if we need to force selection (Fallback key active OR no key at all)
-    // AND if the browser supports the AI Studio selector
     if ((isFallback || !key) && win.aistudio) {
-        // Force open selector if fallback is active or no key
         if (!await win.aistudio.hasSelectedApiKey()) {
              await win.aistudio.openSelectKey();
         }
-        // NOTE: We rely on the GoogleGenAI instance created at the top of this function
-        // which might still hold the old key. 
-        // However, standard flow implies we might need to reinstantiate if the key changes globally.
-        // For now, we assume Veo requests might fail if strictly using the old instance.
-        // But the window.aistudio selector sets a global context for some Google libraries.
-        // To be safe, we proceed. If it fails, the catch block handles it.
     }
 
     let operation;
@@ -376,9 +371,6 @@ export const generateMarketingVideo = async (prompt: string, imageBytes?: string
       operation = await ai.operations.getVideosOperation({ operation: operation });
     }
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-    
-    // If using fallback, we can't append it as it won't work for download auth usually.
-    // But Veo won't work with fallback anyway.
     return videoUri ? `${videoUri}&key=${key}` : null;
   } catch (error) {
     console.error("Video Generation Error", error);

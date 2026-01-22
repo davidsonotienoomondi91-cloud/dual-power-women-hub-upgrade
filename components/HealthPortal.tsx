@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle, CheckCircle, MapPin, Calendar, Clock, AlertTriangle } from 'lucide-react';
+import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle, CheckCircle, MapPin, Calendar, Clock, AlertTriangle, EyeOff } from 'lucide-react';
 import { ChatMessage, Product, UserProfile } from '../types';
 import { getHealthAdvice } from '../services/geminiService';
 import { saveNurseMessage, deleteNurseMessage, getNurseMessages, getProducts, getAllUsers, createShopOrder } from '../services/storageService';
@@ -49,7 +49,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
     };
 
     loadData();
-  }, [messages, activeTab, isNurseUser, isLoading]); // Added isLoading to dependencies
+  }, [messages, activeTab, isNurseUser, isLoading]);
 
   const switchTab = (tab: 'ai' | 'nurse' | 'shop') => {
     setActiveTab(tab);
@@ -226,20 +226,30 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
             <main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full overflow-y-auto">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     
-                    {/* Column 1: Patient Directory */}
+                    {/* Column 1: Patient Directory - MASKED FOR PRIVACY */}
                     <div className="bg-white rounded-xl shadow p-4 md:p-6 lg:col-span-1 border border-slate-200 h-fit">
-                        <h2 className="text-lg md:text-xl font-bold mb-4 flex items-center gap-2 text-slate-800">
-                            <Users className="text-purple-600" /> Patient Directory
-                        </h2>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg md:text-xl font-bold flex items-center gap-2 text-slate-800">
+                                <Users className="text-purple-600" /> Patient Directory
+                            </h2>
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                                <EyeOff size={10} /> PRIVACY MODE ACTIVE
+                            </span>
+                        </div>
                         <div className="space-y-2 max-h-[300px] md:max-h-[500px] overflow-y-auto pr-2">
                             {patients.filter(p => p.role === 'user').map(patient => (
-                                <div key={patient.id} className="p-3 border border-slate-100 rounded-lg bg-slate-50 flex items-center justify-between group">
+                                <div key={patient.id} className="p-3 border border-slate-100 rounded-lg bg-slate-50 flex items-center justify-between group hover:border-purple-200 transition-colors">
                                     <div className="overflow-hidden min-w-0">
-                                        <div className="font-bold text-sm text-slate-900 truncate">{patient.name}</div>
-                                        <div className="text-xs text-slate-500 truncate">{patient.email}</div>
+                                        <div className="font-bold text-sm text-slate-900 truncate font-mono">
+                                            PATIENT ID: #{patient.id.slice(-6).toUpperCase()}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                                            <ShieldCheck size={10} className="text-purple-400" /> 
+                                            Identity Protected
+                                        </div>
                                     </div>
-                                    <div className="text-[10px] text-purple-400 font-mono flex-shrink-0 ml-2">
-                                        {patient.verified ? 'Verified' : 'Unverified'}
+                                    <div className={`text-[10px] font-bold px-2 py-1 rounded ${patient.verified ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {patient.verified ? 'Verified' : 'Pending'}
                                     </div>
                                 </div>
                             ))}
