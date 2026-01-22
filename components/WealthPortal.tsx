@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Store, Wand2, Plus, MapPin, Video, DollarSign, Image as ImageIcon, Sparkles, CheckCircle, RefreshCw, Search, Briefcase, History, Upload, Shield, User, Filter, AlertCircle, ArrowUpDown, TrendingUp, Package, Truck, Clock, PackageCheck, LogOut, Stethoscope, Settings, ListPlus, HelpCircle, MessageSquare, AlertTriangle, FileText, X, Calendar, Layers, Video as VideoIcon, Info, LayoutDashboard, ShoppingCart, ChevronLeft, ExternalLink, PlayCircle, Edit3, Trash2, Users, Copy } from 'lucide-react';
+import { Store, Wand2, Plus, MapPin, Video, DollarSign, Image as ImageIcon, Sparkles, CheckCircle, RefreshCw, Search, Briefcase, History, Upload, Shield, User, Filter, AlertCircle, ArrowUpDown, TrendingUp, Package, Truck, Clock, PackageCheck, LogOut, Stethoscope, Settings, ListPlus, HelpCircle, MessageSquare, AlertTriangle, FileText, X, Calendar, Layers, Video as VideoIcon, Info, LayoutDashboard, ShoppingCart, ChevronLeft, ExternalLink, PlayCircle, Edit3, Trash2, Users, Copy, Navigation, Globe, ShoppingBasket, Minus } from 'lucide-react';
 import Button from './Button';
 import { Asset, GeoLocation, UserProfile, Transaction, SupportTicket } from '../types';
 import { analyzeAsset, generateMarketingVideo, findLocalSuppliers, editAssetImage, validateAssetImages, validateKenyanID } from '../services/geminiService';
-import { uploadMedia, getAssets, addAsset, updateAsset, deleteAsset, rentAsset, purchaseAsset, getTransactions, returnAsset, updateUserProfile, getTickets, addTicket } from '../services/storageService';
+import { uploadMedia, getAssets, addAsset, updateAsset, deleteAsset, rentAsset, purchaseAsset, getTransactions, returnAsset, updateUserProfile, getTickets, addTicket, getUserById } from '../services/storageService';
 
 const CATEGORIES = ['Tailoring', 'Events', 'Farming', 'Catering', 'Electronics', 'Construction', 'Transport', 'Other'];
 const CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'Heavy Duty'];
@@ -16,11 +16,23 @@ interface WealthPortalProps {
     onSwitchToNurse?: () => void;
 }
 
+// Basket Item Interface
+interface BasketItem {
+    cartId: string;
+    asset: Asset;
+    type: 'rent' | 'buy';
+    days: number; // Only relevant for rent, default 1
+}
+
 const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitchToAdmin, onSwitchToNurse }) => {
   const [activeView, setActiveView] = useState<'market' | 'create' | 'tools' | 'rentals' | 'profile'>('market');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [myRentals, setMyRentals] = useState<Transaction[]>([]);
   
+  // Cart/Basket State
+  const [cart, setCart] = useState<BasketItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+
   // Verification State
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [idFrontFile, setIdFrontFile] = useState<File | null>(null);
@@ -32,6 +44,11 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   const [transactionType, setTransactionType] = useState<'rent' | 'buy'>('rent');
   const [rentDays, setRentDays] = useState(1);
   const [deliveryCoords, setDeliveryCoords] = useState<{lat: number, lng: number, accuracy: number} | null>(null);
+
+  // Asset Details View State (New)
+  const [viewingAsset, setViewingAsset] = useState<Asset | null>(null);
+  const [viewingOwner, setViewingOwner] = useState<UserProfile | null>(null);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
 
   // Tickets
   const [myTickets, setMyTickets] = useState<SupportTicket[]>([]);
@@ -92,7 +109,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
         setMyTickets(tickets.filter(t => t.userId === user.id));
     };
     load();
-  }, [activeView, user.id, showTicketModal, selectedAssetForTransaction]);
+  }, [activeView, user.id, showTicketModal, selectedAssetForTransaction, viewingAsset]);
 
   const filteredAssets = assets
     .filter(a => {
@@ -137,6 +154,82 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       });
   };
 
+  // --- BASKET LOGIC ---
+
+  const handleAddToBasket = (asset: Asset, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
+      
+      // Check if already in cart
+      if (cart.some(item => item.asset.id === asset.id)) {
+          alert("This item is already in your basket.");
+          return;
+      }
+
+      const newItem: BasketItem = {
+          cartId: Date.now().toString(),
+          asset: asset,
+          type: asset.listingType === 'sale' ? 'buy' : 'rent',
+          days: 1
+      };
+
+      setCart([...cart, newItem]);
+      // Small visual feedback could be added here
+  };
+
+  const handleRemoveFromBasket = (cartId: string) => {
+      setCart(cart.filter(item => item.cartId !== cartId));
+  };
+
+  const updateBasketItemDays = (cartId: string, days: number) => {
+      setCart(cart.map(item => item.cartId === cartId ? { ...item, days: Math.max(1, days) } : item));
+  };
+
+  const calculateBasketTotal = () => {
+      return cart.reduce((total, item) => {
+          if (item.type === 'buy') {
+              return total + (item.asset.salePrice || 0);
+          } else {
+              return total + (item.asset.dailyRate * item.days);
+          }
+      }, 0);
+  };
+
+  const handleBulkCheckout = async () => {
+      requireVerification(async () => {
+          if (!deliveryCoords) {
+              alert("Please enable location services to confirm delivery point.");
+              return;
+          }
+
+          const totalCost = calculateBasketTotal();
+          
+          // Simulation Payment
+          window.open('https://paywith.nobuk.africa/saacaxzyzb', '_blank');
+          alert(`BULK CHECKOUT:\n\nPlease complete payment of KES ${totalCost.toLocaleString()} on the opened tab.`);
+
+          // Process all items
+          for (const item of cart) {
+              if (item.type === 'buy') {
+                  await purchaseAsset(item.asset.id, user, deliveryCoords);
+              } else {
+                  await rentAsset(item.asset.id, user, item.days, deliveryCoords);
+              }
+          }
+
+          // Clear and Reset
+          setCart([]);
+          setIsCartOpen(false);
+          setDeliveryCoords(null);
+          setAssets(await getAssets()); // Refresh
+          const allTx = await getTransactions();
+          setMyRentals(allTx.filter(t => t.renterId === user.id));
+          setActiveView('rentals');
+          alert("Order Placed Successfully! Check 'My Rentals/Purchases' tab.");
+      });
+  };
+
+  // --------------------
+
   const handleUploadId = async () => {
       if (!idFrontFile || !idBackFile) {
           alert("Both Front and Back of ID are required.");
@@ -145,11 +238,8 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       setIsVerifyingId(true);
       
       try {
-          // 1. Get Base64 for AI Verification (FAST & RELIABLE)
           const frontBase64 = await fileToBase64(idFrontFile);
           const backBase64 = await fileToBase64(idBackFile);
-          
-          // 2. AI Security Check (Direct Base64)
           const validation = await validateKenyanID(frontBase64, backBase64);
           
           if (!validation.valid) {
@@ -158,11 +248,9 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
               return;
           }
 
-          // 3. Upload to Storage (Only if valid)
           const frontUrl = await uploadMedia(idFrontFile);
           const backUrl = await uploadMedia(idBackFile);
 
-          // 4. Success
           const updatedUser = { 
               ...user, 
               idDocumentFront: frontUrl, 
@@ -185,12 +273,25 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   };
 
   const onTransactionClick = (asset: Asset) => {
+      // Single item direct transaction (Legacy support, but we can direct to cart too. Keeping as direct buy for now)
       requireVerification(() => {
           setSelectedAssetForTransaction(asset);
           setTransactionType(asset.listingType === 'sale' ? 'buy' : 'rent');
           setRentDays(1);
           setDeliveryCoords(null);
+          setViewingAsset(null);
       });
+  };
+
+  const handleViewAsset = async (asset: Asset) => {
+      setViewingAsset(asset);
+      setActiveMediaIndex(0);
+      setViewingOwner(null);
+      
+      if (asset.ownerId) {
+          const owner = await getUserById(asset.ownerId);
+          setViewingOwner(owner);
+      }
   };
 
   const handleGetLocation = () => {
@@ -231,7 +332,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           setRentDays(1);
           setDeliveryCoords(null);
           
-          // Refresh data
           setAssets(await getAssets());
           const allTx = await getTransactions();
           setMyRentals(allTx.filter(t => t.renterId === user.id));
@@ -240,22 +340,17 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       }
   };
 
+  // Image & Video Handlers ... (Keep existing)
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Cast to File[] explicitly to avoid 'unknown' inference in some environments
     const files = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
-
     setSelectedFiles(prev => [...prev, ...files]);
-
     const newPreviews: string[] = [];
     for (const file of files) {
         const b64 = await fileToBase64(file);
         newPreviews.push(b64);
     }
-    
     setPreviewImages(prev => [...prev, ...newPreviews]);
-
-    // Analyze the FIRST image only for auto-fill if not editing or explicit request
     if (!isAnalyzing && newPreviews.length > 0 && !editingAssetId) {
         setIsAnalyzing(true);
         const rawJson = await analyzeAsset(newPreviews[0].split(',')[1]);
@@ -277,21 +372,19 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
   const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-
       const video = document.createElement('video');
       video.preload = 'metadata';
       video.onloadedmetadata = function() {
           window.URL.revokeObjectURL(video.src);
           const duration = video.duration;
           setVideoDuration(duration);
-          
           if (duration < 3 || duration > 60) {
               alert(`Video Duration Error!\n\nYour video is ${duration.toFixed(1)} seconds.\n\nRequirement: Between 3 and 60 seconds.`);
               setVideoProofFile(null);
               e.target.value = ''; 
           } else {
               setVideoProofFile(file);
-              setExistingVideoUrl(null); // Clear existing URL if new file selected
+              setExistingVideoUrl(null); 
           }
       };
       video.src = URL.createObjectURL(file);
@@ -335,8 +428,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
       }
   };
 
-  // --- BUSINESS AI TOOLS ---
-
+  // AI & Submission Handlers ... (Keep existing)
   const handleMapSearch = async () => {
     if (!mapQuery.trim()) return;
     setIsSearchingMap(true);
@@ -356,7 +448,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
         alert("Please enter a text prompt for your video.");
         return;
     }
-    
     setIsVideoToolGenerating(true);
     setVideoToolResult(null);
     try {
@@ -365,7 +456,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
           const b64 = await fileToBase64(videoToolImage);
           imgBytes = b64.split(',')[1];
       }
-      
       const result = await generateMarketingVideo(videoToolPrompt, imgBytes);
       if (result) {
           setVideoToolResult(result);
@@ -385,29 +475,19 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
              alert("INCOMPLETE FORM: Please fill in all required text fields including Location.");
              return;
         }
-
-        // Image check: Must have at least 5 images total (new + existing)
         if (previewImages.length < 5) {
             alert(`MISSING IMAGES: You must have at least 5 images of the product. Currently: ${previewImages.length}`);
             return;
         }
-
-        // Video check: Must have a video file OR an existing video URL
         if (!videoProofFile && !existingVideoUrl) {
             alert("MISSING PROOF: You must upload a proof of ownership video.");
             return;
         }
 
         setIsUploading(true);
-
-        // AI Security Check using local previews (Base64) - FAST
-        // Only run check if we have NEW files or if it's a new listing
-        // If editing and using existing images, we assume they were already checked.
         let validation: { valid: boolean; reason?: string } = { valid: true, reason: '' };
         if (selectedFiles.length > 0) {
-             // Only check the new files + existing first few to save tokens
              validation = await validateAssetImages(previewImages, formData.title);
-             
              if (!validation.valid) {
                 setIsUploading(false);
                 const userWantsReview = window.confirm(
@@ -416,7 +496,6 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                     `The system believes this listing may be invalid or low quality.\n\n` +
                     `Click OK to submit for MANUAL ADMIN REVIEW.`
                 );
-                
                 if (!userWantsReview) {
                     return; 
                 }
@@ -424,18 +503,15 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
             }
         }
 
-        // 1. Upload New Images
         const uploadedImageUrls: string[] = [];
         for (const file of selectedFiles) {
             const url = await uploadMedia(file);
             uploadedImageUrls.push(url);
         }
         
-        // Combine with existing images (URLs that are in previewImages)
         const keptExistingImages = previewImages.filter(url => url.startsWith('http'));
         const finalImages = [...keptExistingImages, ...uploadedImageUrls];
 
-        // 2. Upload Video if new one selected
         let finalVideoUrl = existingVideoUrl || '';
         if (videoProofFile) {
             finalVideoUrl = await uploadMedia(videoProofFile);
@@ -459,7 +535,7 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
             verified: false, 
             status: 'available', 
             ownerId: user.id, 
-            moderationStatus: validation.valid ? 'pending' : 'rejected', // Reset to pending on edit for re-approval usually
+            moderationStatus: validation.valid ? 'pending' : 'rejected',
             rejectionReason: validation.valid ? undefined : `AI Rejection: ${validation.reason}`
         };
 
@@ -495,6 +571,78 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 relative">
+      
+      {/* --- BASKET DRAWER / MODAL --- */}
+      {isCartOpen && (
+          <div className="fixed inset-0 z-[60] bg-slate-900/80 backdrop-blur-sm flex justify-end animate-in fade-in duration-200">
+              <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+                  <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+                      <h2 className="text-xl font-bold flex items-center gap-2"><ShoppingBasket className="text-amber-400"/> Your Basket</h2>
+                      <button onClick={() => setIsCartOpen(false)}><X className="text-white/70 hover:text-white"/></button>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                      {cart.length === 0 ? (
+                          <div className="text-center py-20 text-slate-400">
+                              <ShoppingBasket size={48} className="mx-auto mb-4 opacity-50"/>
+                              <p>Your basket is empty.</p>
+                              <button onClick={() => setIsCartOpen(false)} className="mt-4 text-indigo-600 font-bold hover:underline">Browse Market</button>
+                          </div>
+                      ) : (
+                          cart.map((item) => (
+                              <div key={item.cartId} className="bg-white border border-slate-200 p-3 rounded-xl shadow-sm flex gap-3 relative group">
+                                  <img src={item.asset.images[0]} className="w-20 h-20 object-cover rounded-lg bg-slate-100" />
+                                  <div className="flex-1">
+                                      <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">{item.type === 'buy' ? 'Purchase' : 'Rental'}</div>
+                                      <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{item.asset.name}</h4>
+                                      
+                                      {item.type === 'rent' && (
+                                          <div className="flex items-center gap-3 mt-2">
+                                              <button onClick={() => updateBasketItemDays(item.cartId, item.days - 1)} className="p-1 bg-slate-100 rounded hover:bg-slate-200"><Minus size={12}/></button>
+                                              <span className="text-xs font-bold w-12 text-center">{item.days} Days</span>
+                                              <button onClick={() => updateBasketItemDays(item.cartId, item.days + 1)} className="p-1 bg-slate-100 rounded hover:bg-slate-200"><Plus size={12}/></button>
+                                          </div>
+                                      )}
+                                      
+                                      <div className="mt-2 font-bold text-indigo-600 text-sm">
+                                          KES {(item.type === 'buy' ? (item.asset.salePrice || 0) : (item.asset.dailyRate * item.days)).toLocaleString()}
+                                      </div>
+                                  </div>
+                                  <button onClick={() => handleRemoveFromBasket(item.cartId)} className="absolute top-2 right-2 text-slate-300 hover:text-red-500"><Trash2 size={16}/></button>
+                              </div>
+                          ))
+                      )}
+                  </div>
+
+                  <div className="p-6 bg-slate-50 border-t border-slate-200">
+                      {/* Location Picker for Bulk */}
+                      <div className="mb-4">
+                          {!deliveryCoords ? (
+                              <button 
+                                  onClick={handleGetLocation}
+                                  className="w-full py-3 bg-white border border-indigo-200 text-indigo-600 font-bold rounded-lg hover:bg-indigo-50 flex items-center justify-center gap-2 text-xs"
+                              >
+                                  <MapPin size={14} /> Set Delivery Location
+                              </button>
+                          ) : (
+                              <div className="flex items-center gap-2 text-green-700 bg-green-50 p-2 rounded-lg border border-green-200 text-xs font-bold justify-center">
+                                  <CheckCircle size={14} /> Location Set
+                              </div>
+                          )}
+                      </div>
+
+                      <div className="flex justify-between items-center mb-4">
+                          <span className="text-slate-500 font-bold">Total</span>
+                          <span className="text-2xl font-black text-slate-900">KES {calculateBasketTotal().toLocaleString()}</span>
+                      </div>
+                      <Button variant="wealth" className="w-full py-3 shadow-xl" disabled={cart.length === 0} onClick={handleBulkCheckout}>
+                          Checkout ({cart.length} Items)
+                      </Button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Verification Modal */}
       {showVerificationModal && (
           <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -522,6 +670,178 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                       Verify Identity
                   </Button>
                   <button onClick={() => setShowVerificationModal(false)} className="w-full mt-4 text-slate-400 text-sm font-bold hover:text-slate-600">Cancel</button>
+              </div>
+          </div>
+      )}
+
+      {/* ASSET DETAILS MODAL */}
+      {viewingAsset && (
+          <div className="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-md flex items-center justify-center p-2 md:p-6 animate-in fade-in duration-300">
+              <div className="bg-white rounded-2xl w-full max-w-5xl h-full md:h-[90vh] flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
+                  
+                  {/* Close Button */}
+                  <button 
+                      onClick={() => setViewingAsset(null)}
+                      className="absolute top-4 right-4 z-20 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full backdrop-blur-sm transition-all"
+                  >
+                      <X size={24}/>
+                  </button>
+
+                  {/* Left: Media Gallery */}
+                  <div className="md:w-3/5 bg-black flex flex-col justify-center relative">
+                      {/* Main Viewer */}
+                      <div className="flex-1 flex items-center justify-center bg-black relative overflow-hidden">
+                          {activeMediaIndex >= (viewingAsset.images?.length || 0) && viewingAsset.videoProof ? (
+                              <video controls autoPlay className="w-full h-full object-contain max-h-[60vh] md:max-h-full">
+                                  <source src={viewingAsset.videoProof} type="video/mp4"/>
+                                  Your browser does not support the video tag.
+                              </video>
+                          ) : (
+                              <img 
+                                  src={viewingAsset.images?.[activeMediaIndex] || ''} 
+                                  className="w-full h-full object-contain max-h-[60vh] md:max-h-full"
+                                  alt="Product View"
+                              />
+                          )}
+                      </div>
+
+                      {/* Thumbnails */}
+                      <div className="h-20 bg-black/80 flex items-center gap-2 overflow-x-auto p-2 scrollbar-hide shrink-0">
+                          {viewingAsset.images?.map((img, idx) => (
+                              <button 
+                                  key={idx}
+                                  onClick={() => setActiveMediaIndex(idx)}
+                                  className={`h-16 w-16 flex-shrink-0 rounded-lg overflow-hidden border-2 transition-all ${activeMediaIndex === idx ? 'border-amber-500 opacity-100' : 'border-transparent opacity-50 hover:opacity-80'}`}
+                              >
+                                  <img src={img} className="w-full h-full object-cover"/>
+                              </button>
+                          ))}
+                          {viewingAsset.videoProof && (
+                              <button 
+                                  onClick={() => setActiveMediaIndex((viewingAsset.images?.length || 0))}
+                                  className={`h-16 w-16 flex-shrink-0 rounded-lg overflow-hidden border-2 flex items-center justify-center bg-slate-800 transition-all ${activeMediaIndex >= (viewingAsset.images?.length || 0) ? 'border-amber-500 opacity-100' : 'border-transparent opacity-50 hover:opacity-80'}`}
+                              >
+                                  <PlayCircle size={24} className="text-white"/>
+                              </button>
+                          )}
+                      </div>
+                  </div>
+
+                  {/* Right: Info & Actions */}
+                  <div className="md:w-2/5 bg-white flex flex-col h-full overflow-y-auto">
+                      <div className="p-6 flex-1 space-y-6">
+                          
+                          {/* Header */}
+                          <div>
+                              <div className="flex justify-between items-start">
+                                  <div>
+                                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">{viewingAsset.category} • {viewingAsset.condition}</div>
+                                      <h2 className="text-2xl md:text-3xl font-black text-slate-900 leading-tight">{viewingAsset.name}</h2>
+                                  </div>
+                                  <div className="text-right">
+                                      <div className="text-xl md:text-2xl font-black text-indigo-600">
+                                          KES {viewingAsset.listingType === 'sale' ? viewingAsset.salePrice?.toLocaleString() : viewingAsset.dailyRate.toLocaleString()}
+                                      </div>
+                                      {viewingAsset.listingType === 'rent' && <div className="text-xs text-slate-400 font-bold uppercase">Per Day</div>}
+                                  </div>
+                              </div>
+                          </div>
+
+                          {/* Seller Info */}
+                          <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center gap-3">
+                              <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700 font-bold">
+                                  {viewingOwner?.name?.charAt(0) || <User size={18}/>}
+                              </div>
+                              <div className="flex-1">
+                                  <div className="text-xs text-slate-400 font-bold uppercase">Listed By</div>
+                                  <div className="font-bold text-slate-900">{viewingOwner?.name || 'Verified Seller'}</div>
+                              </div>
+                              {viewingOwner?.verified && (
+                                  <div className="bg-green-100 text-green-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1">
+                                      <Shield size={10}/> KYC Verified
+                                  </div>
+                              )}
+                          </div>
+
+                          {/* Location Block - Double Verification */}
+                          <div className="space-y-3">
+                              <h3 className="text-sm font-bold text-slate-900 uppercase border-b border-slate-100 pb-2">Location Intelligence</h3>
+                              <div className="flex items-start gap-3">
+                                  <MapPin className="text-slate-400 mt-0.5" size={18}/>
+                                  <div>
+                                      <div className="text-xs font-bold text-slate-500 uppercase">Listed Location</div>
+                                      <div className="text-sm font-medium text-slate-900">{viewingAsset.location}</div>
+                                  </div>
+                              </div>
+                              <div className="flex items-start gap-3">
+                                  <Navigation className={`mt-0.5 ${viewingOwner?.lastLocation ? 'text-indigo-600' : 'text-slate-300'}`} size={18}/>
+                                  <div>
+                                      <div className="text-xs font-bold text-slate-500 uppercase">Verified GPS Signal</div>
+                                      {viewingOwner?.lastLocation ? (
+                                          <div>
+                                              <a 
+                                                  href={`https://www.google.com/maps?q=${viewingOwner.lastLocation.lat},${viewingOwner.lastLocation.lng}`} 
+                                                  target="_blank" 
+                                                  rel="noreferrer"
+                                                  className="text-sm font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                                              >
+                                                  View Real-Time Location <ExternalLink size={12}/>
+                                              </a>
+                                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                                  Last ping: {new Date(viewingOwner.lastLocation.timestamp).toLocaleDateString()}
+                                              </div>
+                                          </div>
+                                      ) : (
+                                          <div className="text-sm text-slate-400 italic">GPS data unavailable for this seller.</div>
+                                      )}
+                                  </div>
+                              </div>
+                          </div>
+
+                          {/* Description */}
+                          <div>
+                              <h3 className="text-sm font-bold text-slate-900 uppercase border-b border-slate-100 pb-2 mb-2">Description</h3>
+                              <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">{viewingAsset.description}</p>
+                          </div>
+
+                          {viewingAsset.specialDetails && (
+                              <div className="bg-amber-50 p-4 rounded-xl border border-amber-100">
+                                  <h4 className="text-xs font-bold text-amber-800 uppercase mb-1 flex items-center gap-2"><Info size={14}/> Special Instructions</h4>
+                                  <p className="text-xs text-amber-900">{viewingAsset.specialDetails}</p>
+                              </div>
+                          )}
+
+                      </div>
+
+                      {/* Footer Actions */}
+                      <div className="p-6 border-t border-slate-200 bg-slate-50 sticky bottom-0">
+                          {viewingAsset.ownerId === user.id ? (
+                              <div className="text-center text-sm font-bold text-slate-500 bg-slate-200 py-3 rounded-xl">
+                                  You own this listing.
+                              </div>
+                          ) : (
+                              <div className="flex gap-2">
+                                  <button 
+                                      onClick={(e) => {
+                                          handleAddToBasket(viewingAsset, e);
+                                          setIsCartOpen(true);
+                                          setViewingAsset(null);
+                                      }}
+                                      className="flex-1 bg-white border border-indigo-200 text-indigo-600 font-bold py-4 rounded-xl hover:bg-indigo-50 shadow-sm transition-colors flex items-center justify-center gap-2"
+                                  >
+                                      <ShoppingBasket size={20} /> Add to Basket
+                                  </button>
+                                  <Button 
+                                      variant="wealth" 
+                                      onClick={() => onTransactionClick(viewingAsset)}
+                                      className="flex-1 py-4 text-lg shadow-xl"
+                                  >
+                                      {viewingAsset.listingType === 'sale' ? 'Purchase Now' : 'Rent This Item'}
+                                  </Button>
+                              </div>
+                          )}
+                      </div>
+                  </div>
               </div>
           </div>
       )}
@@ -654,7 +974,20 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
             <div><h1 className="font-bold text-lg tracking-wide">Dual Power <span className="text-amber-400">Wealth</span></h1></div>
           </div>
           <div className="flex items-center gap-6">
-             <div className="text-sm font-semibold">Wallet: <span className="text-amber-400 font-mono text-base">KES {myEarnings.toLocaleString()}</span></div>
+             <div className="text-sm font-semibold hidden md:block">Wallet: <span className="text-amber-400 font-mono text-base">KES {myEarnings.toLocaleString()}</span></div>
+             
+             {/* BASKET TRIGGER */}
+             <button 
+                onClick={() => setIsCartOpen(true)}
+                className="relative p-2 hover:bg-slate-800 rounded-full transition-colors"
+             >
+                 <ShoppingBasket size={24} className="text-white"/>
+                 {cart.length > 0 && (
+                     <span className="absolute top-0 right-0 bg-amber-500 text-slate-900 text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-900">
+                         {cart.length}
+                     </span>
+                 )}
+             </button>
           </div>
         </div>
       </header>
@@ -699,7 +1032,11 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6">
                     {filteredAssets.map(asset => (
-                        <div key={asset.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden group">
+                        <div 
+                            key={asset.id} 
+                            onClick={() => handleViewAsset(asset)}
+                            className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden group cursor-pointer hover:shadow-lg transition-all hover:border-indigo-300 relative"
+                        >
                             <div className="h-48 bg-slate-100 relative">
                                 <img src={asset.images?.[0] || ''} className="w-full h-full object-cover"/>
                                 {asset.status === 'rented' && <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white font-bold">RENTED</div>}
@@ -726,9 +1063,29 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                                         KES {asset.listingType === 'sale' ? asset.salePrice : asset.dailyRate}
                                         {asset.listingType === 'rent' && <span className="text-xs font-normal text-slate-500">/day</span>}
                                     </span>
-                                    <Button variant="wealth" size="sm" disabled={asset.status !== 'available'} onClick={() => onTransactionClick(asset)}>
-                                        {asset.listingType === 'sale' ? 'Buy Now' : 'Rent'}
-                                    </Button>
+                                    
+                                    {/* Action Buttons on Card */}
+                                    <div className="flex gap-2">
+                                        {asset.ownerId !== user.id && asset.status === 'available' && (
+                                            <button 
+                                                className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
+                                                onClick={(e) => handleAddToBasket(asset, e)}
+                                                title="Add to Basket"
+                                            >
+                                                <ShoppingBasket size={16} />
+                                            </button>
+                                        )}
+                                        <button 
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-sm ${asset.listingType === 'sale' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-amber-500 hover:bg-amber-600'}`}
+                                            disabled={asset.status !== 'available'} 
+                                            onClick={(e) => {
+                                                e.stopPropagation(); 
+                                                onTransactionClick(asset);
+                                            }}
+                                        >
+                                            {asset.listingType === 'sale' ? 'Buy Now' : 'Rent'}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -816,7 +1173,11 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                     ) : (
                         <div className="divide-y divide-slate-100">
                             {myListings.map(item => (
-                                <div key={item.id} className="p-4 hover:bg-slate-50">
+                                <div 
+                                    key={item.id} 
+                                    onClick={() => handleViewAsset(item)}
+                                    className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
+                                >
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                                         <div className="flex items-center gap-3">
                                             <div className="w-16 h-16 bg-slate-100 rounded-lg overflow-hidden flex-shrink-0">
@@ -848,14 +1209,14 @@ const WealthPortal: React.FC<WealthPortalProps> = ({ user, onUpdateUser, onSwitc
                                             
                                             {/* EDIT & DELETE ACTIONS */}
                                             <button 
-                                                onClick={() => handleEditAsset(item)}
+                                                onClick={(e) => { e.stopPropagation(); handleEditAsset(item); }}
                                                 className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
                                                 title="Edit Listing"
                                             >
                                                 <Edit3 size={16}/>
                                             </button>
                                             <button 
-                                                onClick={() => handleDeleteAsset(item.id)}
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteAsset(item.id); }}
                                                 className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-red-50 hover:text-red-600 transition-colors"
                                                 title="Delete Listing"
                                             >

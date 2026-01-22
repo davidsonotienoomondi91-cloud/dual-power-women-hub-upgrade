@@ -68,9 +68,9 @@ export const getSystemDiagnostics = async (): Promise<{ status: 'online'|'offlin
         else if (key === envKey) keyType = 'env';
         else keyType = 'custom';
 
-        // Ping the model with a tiny token request
+        // Ping the model with a tiny token request - Using 2.5 Flash for speed/free tier
         await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-2.5-flash',
             contents: { parts: [{ text: 'ping' }] }
         });
 
@@ -78,7 +78,7 @@ export const getSystemDiagnostics = async (): Promise<{ status: 'online'|'offlin
             status: 'online',
             latency: Date.now() - start,
             keyType,
-            model: 'gemini-3-flash-preview'
+            model: 'gemini-2.5-flash'
         };
     } catch (e) {
         console.error("Diagnostic Fail:", e);
@@ -137,7 +137,8 @@ export const getHealthAdvice = async (
         ],
         config: {
           systemInstruction: systemInstruction,
-          tools: shouldEscalate ? [] : [{ googleSearch: {} }],
+          // Only use Google Search if NOT escalated (privacy/speed) and supported by model
+          tools: (!shouldEscalate && model.includes('2.5')) ? [{ googleSearch: {} }] : [],
         }
       });
   };
@@ -145,12 +146,12 @@ export const getHealthAdvice = async (
   try {
     let response;
     try {
-        // Try Primary Model
-        response = await generate('gemini-3-flash-preview');
-    } catch (primaryError) {
-        console.warn("Primary Model Failed, trying fallback 'gemini-2.5-flash'", primaryError);
-        // Fallback to older stable model
+        // Default to gemini-2.5-flash for Free Tier stability (High RPM)
         response = await generate('gemini-2.5-flash');
+    } catch (primaryError) {
+        console.warn("Primary Model Failed, trying fallback 'gemini-flash-lite'", primaryError);
+        // Fallback to lighter model
+        response = await generate('gemini-flash-lite-latest');
     }
 
     const text = response.text || "I apologize, I could not process that request.";
@@ -182,8 +183,9 @@ export const getHealthAdvice = async (
 export const analyzeAsset = async (base64Image: string): Promise<string> => {
   const { ai } = await getAI();
   try {
+    // Use 2.5 Flash for image analysis (efficient & free tier friendly)
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.5-flash',
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
@@ -225,8 +227,9 @@ export const validateAssetImages = async (images: string[], title: string): Prom
             Return JSON: { "valid": boolean, "reason": "string (short harsh reason if rejected)" }` 
         });
 
+        // Use 2.5 Flash for validation
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', 
+            model: 'gemini-2.5-flash', 
             contents: { parts },
             config: { responseMimeType: 'application/json' }
         });
@@ -273,8 +276,9 @@ export const validateKenyanID = async (frontImage: string, backImage: string): P
                 Return JSON: { "valid": boolean, "reason": "string (HARSH warning if fake)" }` }
             ];
 
+            // Use 2.5 Flash for ID Check
             const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview', 
+                model: 'gemini-2.5-flash', 
                 contents: { parts: parts as any },
                 config: { responseMimeType: 'application/json' }
             });
@@ -298,7 +302,7 @@ export const editAssetImage = async (base64Image: string, prompt: string): Promi
   const { ai } = await getAI();
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
+      model: 'gemini-2.5-flash-image', // Dedicated image model
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/png', data: base64Image } },
@@ -344,7 +348,15 @@ export const generateMarketingVideo = async (prompt: string, imageBytes?: string
   const { ai, key, isFallback } = await getAI();
   try {
     const win = window as any;
-    if ((isFallback || !key) && win.aistudio) {
+    
+    // Veo check: If using Fallback or Free Key, we prevent Veo call to avoid crashing
+    // Veo usually requires a paid project.
+    if (isFallback) {
+        console.warn("Veo video generation skipped: Free/Fallback key detected.");
+        return null;
+    }
+
+    if (!key && win.aistudio) {
         if (!await win.aistudio.hasSelectedApiKey()) {
              await win.aistudio.openSelectKey();
         }
@@ -372,8 +384,9 @@ export const generateMarketingVideo = async (prompt: string, imageBytes?: string
     }
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
     return videoUri ? `${videoUri}&key=${key}` : null;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Video Generation Error", error);
+    // Return null so the UI can handle it gracefully as "Not Available"
     return null;
   }
 };
