@@ -55,17 +55,18 @@ const fetchDb = async (): Promise<DbSchema> => {
 
         if (!response.ok) {
             console.warn("JSONBin Fetch Error:", response.statusText);
-            // If bin is empty or new, return default
             return dbCache || DEFAULT_DB;
         }
 
         const data = await response.json();
-        // JSONBin V3 returns data in `record` field
         const record = data.record || DEFAULT_DB;
         
         // Merge with default to ensure all collections exist
         dbCache = { ...DEFAULT_DB, ...record };
-        if(!dbCache?.referralRewards) dbCache!.referralRewards = []; // Ensure new collection exists for old DBs
+        // Critical: Ensure arrays exist for legacy data
+        if(!dbCache?.referralRewards) dbCache!.referralRewards = []; 
+        if(!dbCache?.assets) dbCache!.assets = [];
+        if(!dbCache?.products) dbCache!.products = [];
 
         lastFetch = now;
         return dbCache as DbSchema;
@@ -89,7 +90,12 @@ const saveDb = async (newData: DbSchema): Promise<boolean> => {
             },
             body: JSON.stringify(newData)
         });
-        return response.ok;
+        
+        if (!response.ok) {
+            console.error("DB Save Failed:", response.statusText);
+            return false;
+        }
+        return true;
     } catch (e) {
         console.error("Storage Write Error:", e);
         return false;
@@ -141,13 +147,11 @@ export const loginUser = async (email: string, password: string): Promise<UserPr
         const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
 
         if (user) {
-            // In a real app, verify hash. Here we compare plain text for demo.
             // @ts-ignore - Assuming password exists on stored object
             if (user.password === password) {
                  if (user.approvalStatus === 'pending' || user.approvalStatus === 'rejected') {
                      return "Your account is pending Admin approval. Please contact support.";
                  }
-                 // Remove password before returning
                  const { password: _, ...safeUser } = user as any;
                  return safeUser as UserProfile;
             }
@@ -170,9 +174,11 @@ export const registerUser = async (data: { name: string; email: string; phone: s
         // Validate Referral Code
         let validReferrerCode = undefined;
         if (data.referralCode) {
-            const referrer = db.users.find(u => u.referralCode === data.referralCode.trim().toUpperCase());
+            const code = data.referralCode.trim().toUpperCase();
+            const referrer = db.users.find(u => u.referralCode === code);
             if (referrer) {
                 validReferrerCode = referrer.referralCode;
+                console.log("Valid referrer found:", validReferrerCode);
             }
         }
 
@@ -226,7 +232,6 @@ export const updateUserProfile = async (updatedUser: UserProfile): Promise<void>
     const db = await fetchDb();
     const index = db.users.findIndex(u => u.id === updatedUser.id);
     if (index >= 0) {
-        // Preserve password which isn't in UserProfile type
         const existing = db.users[index];
         db.users[index] = { ...existing, ...updatedUser };
         await saveDb(db);
@@ -287,13 +292,16 @@ export const getProducts = async (): Promise<Product[]> => {
 
 export const saveProduct = async (product: Product) => {
     const db = await fetchDb();
+    if (!db.products) db.products = [];
+    
     const index = db.products.findIndex(p => p.id === product.id);
     if (index >= 0) {
         db.products[index] = product;
     } else {
         db.products.push(product);
     }
-    await saveDb(db);
+    const success = await saveDb(db);
+    if (!success) throw new Error("Failed to save product. Image might be too large.");
 };
 
 export const deleteProduct = async (id: string) => {
@@ -311,6 +319,7 @@ export const getAssets = async (): Promise<Asset[]> => {
 
 export const addAsset = async (asset: Asset): Promise<void> => {
     const db = await fetchDb();
+    if (!db.assets) db.assets = [];
     db.assets.push(asset);
 
     // --- REFERRAL REWARD LOGIC ---
@@ -321,7 +330,7 @@ export const addAsset = async (asset: Asset): Promise<void> => {
             
             // If this is their FIRST item and they were referred
             if (!user.hasListedFirstItem) {
-                user.hasListedFirstItem = true; // Mark as done so we don't pay twice
+                user.hasListedFirstItem = true; // Mark as done
                 
                 if (user.referredBy) {
                     const referrerIndex = db.users.findIndex(u => u.referralCode === user.referredBy);
@@ -329,8 +338,9 @@ export const addAsset = async (asset: Asset): Promise<void> => {
                         const referrer = db.users[referrerIndex];
                         referrer.referralEarnings = (referrer.referralEarnings || 0) + 10; // Earn KES 10
 
-                        // Create Reward Record for Admin
+                        // Ensure collection exists
                         if (!db.referralRewards) db.referralRewards = [];
+                        
                         db.referralRewards.push({
                             id: Date.now().toString() + '_ref',
                             referrerId: referrer.id,
@@ -341,13 +351,18 @@ export const addAsset = async (asset: Asset): Promise<void> => {
                             status: 'pending',
                             createdAt: new Date().toISOString()
                         });
+                        console.log("Referral reward recorded for:", referrer.name);
                     }
                 }
             }
         }
     }
 
-    await saveDb(db);
+    const success = await saveDb(db);
+    if (!success) {
+        console.error("Failed to save asset or referral reward!");
+        throw new Error("Asset save failed. Please use smaller images.");
+    }
 };
 
 export const updateAsset = async (updatedAsset: Asset): Promise<void> => {
@@ -382,6 +397,7 @@ export const getTransactions = async (): Promise<Transaction[]> => {
 
 export const createShopOrder = async (product: Product, buyer: UserProfile, deliveryDate: string, location: {lat: number, lng: number, accuracy: number}): Promise<void> => {
     const db = await fetchDb();
+    if (!db.transactions) db.transactions = [];
     
     // Update Stock
     const pIndex = db.products.findIndex(p => p.id === product.id);
@@ -460,7 +476,7 @@ export const purchaseAsset = async (
     const db = await fetchDb();
     const assetIndex = db.assets.findIndex(a => a.id === assetId);
 
-    if (assetIndex >= 0 && (db.assets[assetIndex].status === 'available' || db.assets[assetIndex].status === 'rented')) { // Allow buying even if currently rented if owner allows (logic simplification)
+    if (assetIndex >= 0 && (db.assets[assetIndex].status === 'available' || db.assets[assetIndex].status === 'rented')) {
         
         // Mark Asset as Sold
         db.assets[assetIndex].status = 'sold';
@@ -471,11 +487,11 @@ export const purchaseAsset = async (
             id: txId,
             assetId: assetData.id,
             assetName: assetData.name,
-            renterId: buyer.id, // Buyer ID stored in renterId for schema consistency
+            renterId: buyer.id, 
             renterName: buyer.name,
             startDate: new Date().toISOString(),
             totalCost: assetData.salePrice || 0,
-            status: 'pending_approval', // Needs logistic confirmation
+            status: 'pending_approval',
             depositHeld: false,
             ownerId: assetData.ownerId,
             deliveryLocation: location,
@@ -523,6 +539,7 @@ export const getReferralRewards = async (): Promise<ReferralReward[]> => {
 
 export const markReferralPaid = async (rewardId: string) => {
     const db = await fetchDb();
+    if (!db.referralRewards) return;
     const index = db.referralRewards.findIndex(r => r.id === rewardId);
     if (index >= 0) {
         db.referralRewards[index].status = 'paid';
@@ -539,6 +556,7 @@ export const getTickets = async (): Promise<SupportTicket[]> => {
 
 export const addTicket = async (ticket: SupportTicket) => {
     const db = await fetchDb();
+    if(!db.tickets) db.tickets = [];
     db.tickets.push(ticket);
     await saveDb(db);
 };
@@ -565,18 +583,51 @@ export const getSettings = async (): Promise<AppSettings> => {
     return db.settings || { orgName: 'Dual Power Women Hub', logoUrl: '' };
 };
 
-// --- MEDIA (Cloudinary + Base64 Fallback) ---
+// --- MEDIA (Cloudinary + Smart Compression) ---
 
-const fileToBase64 = (file: File): Promise<string> => {
+// High-performance image compressor for JSONBin constraints
+const compressImage = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = error => reject(error);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800; // Limit resolution for storage
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Compress to JPEG at 70% quality
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.onerror = (e) => reject(e);
+    };
+    reader.onerror = (e) => reject(e);
   });
 };
 
 export const uploadMedia = async (file: File): Promise<string> => {
+  // 1. Try Cloudinary first
   const cloudName = CLOUDINARY_CLOUD_NAME;
   const uploadPreset = CLOUDINARY_UPLOAD_PRESET;
 
@@ -591,15 +642,20 @@ export const uploadMedia = async (file: File): Promise<string> => {
     });
     
     if (!response.ok) {
-        throw new Error(`Upload Failed: ${response.statusText}`);
+        throw new Error(`Cloudinary Upload Failed: ${response.statusText}`);
     }
 
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
     return data.secure_url;
   } catch (error) {
-    console.warn("Cloudinary upload failed, using Base64 fallback (Admin/Storage persistence ensured):", error);
-    // Fallback to Base64 so image is actually stored in JSONBin, ensuring admins can see it.
-    return await fileToBase64(file);
+    // 2. Fallback to Compressed Base64
+    console.warn("Cloudinary failed, using Compressed Base64 fallback to fit in DB:", error);
+    try {
+        return await compressImage(file);
+    } catch (e) {
+        console.error("Compression failed:", e);
+        throw new Error("Failed to process image.");
+    }
   }
 };

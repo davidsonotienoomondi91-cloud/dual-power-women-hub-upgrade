@@ -71,7 +71,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
         setNurseLogs(await getNurseMessages());
         setProducts(await getProducts());
         setTickets(await getTickets());
-        setReferralRewards(await getReferralRewards());
+        const rewards = await getReferralRewards();
+        setReferralRewards(rewards || []); // Ensure array
         setSettings(await getSettings());
         
         // Run Diagnostics quietly
@@ -144,7 +145,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
     setIsProductModalOpen(true);
   };
 
-  // Helper to convert Base64 string back to File object for uploading
   const base64ToFile = (dataurl: string, filename: string): File => {
       const arr = dataurl.split(',');
       const match = arr[0].match(/:(.*?);/);
@@ -211,23 +211,27 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onSwitc
     }
     setIsSavingProduct(true);
     
-    let imageUrl = productForm.image || '';
-    if (productImageFile) {
-        imageUrl = await uploadMedia(productImageFile);
+    try {
+        let imageUrl = productForm.image || '';
+        if (productImageFile) {
+            imageUrl = await uploadMedia(productImageFile);
+        }
+
+        const productToSave: Product = {
+            id: editingProduct ? editingProduct.id : Date.now().toString(),
+            name: productForm.name!,
+            price: Number(productForm.price),
+            stock: Number(productForm.stock),
+            category: productForm.category as 'hygiene' | 'wellness',
+            image: imageUrl || 'https://via.placeholder.com/150'
+        };
+
+        await saveProduct(productToSave);
+        setIsProductModalOpen(false);
+        loadData();
+    } catch (e) {
+        alert("Failed to save product. Image might be too large even after compression. Please try a smaller image.");
     }
-
-    const productToSave: Product = {
-        id: editingProduct ? editingProduct.id : Date.now().toString(),
-        name: productForm.name!,
-        price: Number(productForm.price),
-        stock: Number(productForm.stock),
-        category: productForm.category as 'hygiene' | 'wellness',
-        image: imageUrl || 'https://via.placeholder.com/150'
-    };
-
-    await saveProduct(productToSave);
-    setIsProductModalOpen(false);
-    loadData();
     setIsSavingProduct(false);
   };
 
