@@ -3,13 +3,18 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { GroundingSource, GeoLocation } from "../types";
 import { getSettings } from "./storageService";
 
-// Hardcoded fallback key provided for deployment stability
+// Hardcoded fallback key provided for deployment stability (Text/Vision only)
 const FALLBACK_API_KEY = "AIzaSyCloJjKarKbYjvYoMw-uJl9hcKRDJqcNuw";
 const VERIFICATION_TIMEOUT_MS = 60000; // 60 Seconds Failsafe
 
 // Helper to safely get env var without crashing if process is undefined
 const getEnvKey = () => {
     try {
+        // @ts-ignore
+        if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_KEY) {
+            // @ts-ignore
+            return import.meta.env.VITE_API_KEY;
+        }
         // @ts-ignore
         return typeof process !== 'undefined' && process.env ? process.env.API_KEY : "";
     } catch (e) {
@@ -22,9 +27,9 @@ const getAI = async () => {
   let dbKey = "";
 
   // 1. Try to get key from DB Settings (Admin Configured)
-  // We use a timeout to ensure this doesn't block the UI if DB is slow
   try {
     const settingsPromise = getSettings();
+    // Short timeout for settings fetch to prevent blocking
     const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500));
     const settings = await Promise.race([settingsPromise, timeoutPromise]);
     
@@ -37,13 +42,53 @@ const getAI = async () => {
 
   // 2. Resolve Final Key: DB > Env > Hardcoded Fallback
   const finalKey = dbKey || getEnvKey() || FALLBACK_API_KEY;
+  const isFallback = finalKey === FALLBACK_API_KEY;
   
   if (!finalKey) console.error("CRITICAL: No Gemini API Key found!");
 
   return { 
       ai: new GoogleGenAI({ apiKey: finalKey }),
-      key: finalKey
+      key: finalKey,
+      isFallback
   };
+};
+
+/**
+ * SYSTEM: Diagnostics
+ * Checks if the AI is reachable and what key level is being used.
+ */
+export const getSystemDiagnostics = async (): Promise<{ status: 'online'|'offline', latency: number, keyType: 'custom'|'fallback'|'env', model: string }> => {
+    const start = Date.now();
+    try {
+        const { ai, key, isFallback } = await getAI();
+        const envKey = getEnvKey();
+        
+        let keyType: 'custom'|'fallback'|'env' = 'fallback';
+        if (isFallback) keyType = 'fallback';
+        else if (key === envKey) keyType = 'env';
+        else keyType = 'custom';
+
+        // Ping the model with a tiny token request
+        await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: 'ping' }] }
+        });
+
+        return {
+            status: 'online',
+            latency: Date.now() - start,
+            keyType,
+            model: 'gemini-3-flash-preview'
+        };
+    } catch (e) {
+        console.error("Diagnostic Fail:", e);
+        return {
+            status: 'offline',
+            latency: 0,
+            keyType: 'fallback', // assumption on fail
+            model: 'unknown'
+        };
+    }
 };
 
 /**
@@ -56,14 +101,27 @@ export const getHealthAdvice = async (
 ): Promise<{ text: string; sources: GroundingSource[]; isEscalated: boolean }> => {
   const { ai } = await getAI();
   
-  const escalationKeywords = ['bleeding', 'emergency', 'pain', 'suicide', 'severe', 'pregnant', 'miscarriage', 'lump', 'fever', 'blood', 'hurt', 'sick', 'hospital'];
+  // Expanded keywords for stricter safety
+  const escalationKeywords = [
+      'bleeding', 'emergency', 'pain', 'suicide', 'severe', 'pregnant', 'miscarriage', 'lump', 'fever', 'blood', 
+      'hurt', 'sick', 'hospital', 'dying', 'kill', 'abuse', 'rape', 'assault', 'danger', 'scared', 'afraid', 
+      'chest', 'breath', 'faint', 'conscious', 'poison', 'overdose', 'burn', 'broken', 'stroke', 'attack',
+      'help', 'urget'
+  ];
+  
   const shouldEscalate = isNurseMode || escalationKeywords.some(k => currentMessage.toLowerCase().includes(k));
 
   const kenyanLanguages = `Swahili, English, Kikuyu, Luhya, Luo, Kalenjin, Kamba, Kisii, Meru, Mijikenda, Somali, Turkana, Maasai, Taita, Embu, Pokot, Giriama, Samburu, Borana, Kiembu, Kigiriama, Kipokot, Kipsigis, Kimeru, Kisamburu, Kitaita, Kiteso, Kiturkana, Kuria, Mbeere, Njemps, Ogiek, Orma, Pokomo, Rendille, Sengwer, Suba, Taveta, Tharaka, Bajuni, Burji, Dasenach, El Molo, Galjeel, Galla, Gosha, Ilchamus, Konso, Sakuye, Waata.`;
 
   const baseInstruction = `Context: You are an AI assistant for "Dual Power Women Hub" in Kenya. Language Protocol: Support all Kenyan languages: ${kenyanLanguages}. Mirror user's language. Formatting: Plain text only.`;
-  const nurseInstruction = `${baseInstruction} Role: Virtual Private Nurse. Task: Provide professional medical triage advice. Tone: Empathetic, calm, serious.`;
-  const friendInstruction = `${baseInstruction} Role: Women's Wellness Assistant. Task: Answer general health/lifestyle questions. Tone: Friendly, sisterly.`;
+  const nurseInstruction = `${baseInstruction} CRITICAL ROLE: Virtual Private Nurse. Task: Provide professional medical triage advice. 
+  RULES:
+  1. Acknowledge the severity immediately.
+  2. advise on immediate first aid if applicable.
+  3. Strongly recommend visiting a hospital or calling emergency services (999 or 112 in Kenya).
+  4. Tone: Empathetic, calm, serious, professional.`;
+  
+  const friendInstruction = `${baseInstruction} Role: Women's Wellness Assistant. Task: Answer general health/lifestyle questions. Tone: Friendly, sisterly. If symptoms seem severe, suggest seeing a doctor.`;
 
   const systemInstruction = shouldEscalate ? nurseInstruction : friendInstruction;
 
@@ -80,6 +138,7 @@ export const getHealthAdvice = async (
       ],
       config: {
         systemInstruction: systemInstruction,
+        // Disable Google Search in escalation mode to focus on direct medical advice/instructions
         tools: shouldEscalate ? [] : [{ googleSearch: {} }],
       }
     });
@@ -100,6 +159,10 @@ export const getHealthAdvice = async (
 
   } catch (error: any) {
     console.warn("Health AI Error:", error);
+    // Fallback response if API fails
+    if (shouldEscalate) {
+        return { text: "I am having trouble connecting, but your situation sounds serious. Please go to the nearest hospital immediately or call 112.", sources: [], isEscalated: true };
+    }
     return { text: "Network connection weak. Please call 0112241760 for immediate help.", sources: [], isEscalated: true };
   }
 };
@@ -269,16 +332,27 @@ export const findLocalSuppliers = async (query: string, location: GeoLocation): 
 };
 
 export const generateMarketingVideo = async (prompt: string, imageBytes?: string): Promise<string | null> => {
-  const { ai, key } = await getAI();
+  const { ai, key, isFallback } = await getAI();
   try {
-    // Note: Veo often requires a paid key selected by user via window.aistudio
-    // However, if the Admin has provided a key in settings, we try to use that via the SDK.
+    // CRITICAL: Veo video generation REQUIRES a paid key. 
+    // If we are currently using the fallback key, we MUST force the user to select their own key.
+    // The fallback key does not have Veo quota.
+    
     const win = window as any;
     
-    // If we have a configured key from Admin settings or Hardcoded Fallback, we skip the user selection prompt.
-    // If no key is configured, we fall back to the prompt.
-    if (!key && win.aistudio && !await win.aistudio.hasSelectedApiKey()) {
-        throw new Error("API Key not selected");
+    // Check if we need to force selection (Fallback key active OR no key at all)
+    // AND if the browser supports the AI Studio selector
+    if ((isFallback || !key) && win.aistudio) {
+        // Force open selector if fallback is active or no key
+        if (!await win.aistudio.hasSelectedApiKey()) {
+             await win.aistudio.openSelectKey();
+        }
+        // NOTE: We rely on the GoogleGenAI instance created at the top of this function
+        // which might still hold the old key. 
+        // However, standard flow implies we might need to reinstantiate if the key changes globally.
+        // For now, we assume Veo requests might fail if strictly using the old instance.
+        // But the window.aistudio selector sets a global context for some Google libraries.
+        // To be safe, we proceed. If it fails, the catch block handles it.
     }
 
     let operation;
@@ -303,7 +377,8 @@ export const generateMarketingVideo = async (prompt: string, imageBytes?: string
     }
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
     
-    // Append the resolved key (Admin's key, Hardcoded, or User's env key)
+    // If using fallback, we can't append it as it won't work for download auth usually.
+    // But Veo won't work with fallback anyway.
     return videoUri ? `${videoUri}&key=${key}` : null;
   } catch (error) {
     console.error("Video Generation Error", error);

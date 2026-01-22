@@ -24,6 +24,11 @@ export interface UserProfile {
     lng: number;
     timestamp: string;
   };
+  // Referral System
+  referralCode: string; // Unique code generated on signup
+  referredBy?: string; // Code of the referrer
+  referralEarnings: number; // Total earnings from referrals
+  hasListedFirstItem: boolean; // Trigger flag for reward
 }
 
 export interface ChatMessage {
@@ -48,14 +53,19 @@ export interface Asset {
   id: string;
   name: string;
   description: string;
+  location: string; // Town, Estate, or City
   specialDetails?: string; // Optional handling instructions
-  dailyRate: number;
+  dailyRate: number; // Used for Rental Rate
+  salePrice?: number; // Used for Selling Price
+  listingType: 'rent' | 'sale'; // Discriminator
+  category?: string;
+  condition?: string;
   images: string[]; 
   videoProof: string; // URL/Base64 of the 15-18s proof video
   videoUrl?: string; // Generated marketing video (Veo)
   verified: boolean;
   ownerId?: string;
-  status: 'available' | 'rented' | 'maintenance';
+  status: 'available' | 'rented' | 'sold' | 'maintenance';
   moderationStatus: 'pending' | 'approved' | 'rejected';
   rejectionReason?: string; // Reason for rejection by admin or AI
 }
@@ -69,7 +79,7 @@ export interface Transaction {
   startDate: string; // Used as Delivery Date for Shop Orders
   endDate?: string;
   totalCost: number;
-  status: 'active' | 'returned' | 'disputed' | 'pending_approval' | 'in_transit' | 'delivered';
+  status: 'active' | 'returned' | 'disputed' | 'pending_approval' | 'in_transit' | 'delivered' | 'sold';
   depositHeld: boolean;
   ownerId?: string; 
   deliveryLocation?: {
@@ -78,6 +88,7 @@ export interface Transaction {
     accuracy: number;
   };
   deliveryNotes?: string; // Used for specific time instructions or landmark
+  transactionType?: 'rent' | 'sale';
 }
 
 export interface SupportTicket {
@@ -89,6 +100,17 @@ export interface SupportTicket {
   message: string;
   status: 'pending' | 'resolved';
   adminReply?: string;
+  createdAt: string;
+}
+
+export interface ReferralReward {
+  id: string;
+  referrerId: string;
+  referrerName: string;
+  referredUserId: string;
+  referredUserName: string;
+  amount: number;
+  status: 'pending' | 'paid';
   createdAt: string;
 }
 

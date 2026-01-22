@@ -1,5 +1,5 @@
 
-import { Asset, Transaction, UserProfile, AppSettings, ChatMessage, Product, UserRole, SupportTicket } from '../types';
+import { Asset, Transaction, UserProfile, AppSettings, ChatMessage, Product, UserRole, SupportTicket, ReferralReward } from '../types';
 
 // --- CONFIGURATION ---
 const JSONBIN_BIN_ID = "6949350743b1c97be9fe7467";
@@ -8,8 +8,6 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
 const CLOUDINARY_CLOUD_NAME = "dwvjtjmxo";
 const CLOUDINARY_UPLOAD_PRESET = "dualpower_upload"; 
-// Note: API Key (541182386814422) and Secret are typically used for server-side signing. 
-// For this client-side demo, we use the unsigned upload preset.
 
 // --- TYPES ---
 interface DbSchema {
@@ -19,6 +17,7 @@ interface DbSchema {
   nurse_messages: ChatMessage[];
   products: Product[];
   tickets: SupportTicket[];
+  referralRewards: ReferralReward[];
   settings: AppSettings;
 }
 
@@ -29,6 +28,7 @@ const DEFAULT_DB: DbSchema = {
   nurse_messages: [],
   products: [],
   tickets: [],
+  referralRewards: [],
   settings: { orgName: 'Dual Power Women Hub', logoUrl: '' }
 };
 
@@ -65,6 +65,8 @@ const fetchDb = async (): Promise<DbSchema> => {
         
         // Merge with default to ensure all collections exist
         dbCache = { ...DEFAULT_DB, ...record };
+        if(!dbCache?.referralRewards) dbCache!.referralRewards = []; // Ensure new collection exists for old DBs
+
         lastFetch = now;
         return dbCache as DbSchema;
     } catch (e) {
@@ -106,7 +108,10 @@ export const getUserById = async (userId: string): Promise<UserProfile | null> =
             phone: '0716602552',
             role: 'admin',
             verified: true,
-            approvalStatus: 'approved'
+            approvalStatus: 'approved',
+            referralCode: 'ADMIN001',
+            referralEarnings: 0,
+            hasListedFirstItem: true
         };
     }
 
@@ -125,7 +130,10 @@ export const loginUser = async (email: string, password: string): Promise<UserPr
                 phone: '0716602552',
                 role: 'admin',
                 verified: true,
-                approvalStatus: 'approved'
+                approvalStatus: 'approved',
+                referralCode: 'ADMIN001',
+                referralEarnings: 0,
+                hasListedFirstItem: true
             };
         }
 
@@ -152,30 +160,46 @@ export const loginUser = async (email: string, password: string): Promise<UserPr
     }
 };
 
-export const registerUser = async (data: { name: string; email: string; phone: string; password: string }): Promise<UserProfile | string> => {
+export const registerUser = async (data: { name: string; email: string; phone: string; password: string; referralCode?: string }): Promise<UserProfile | string> => {
     try {
         const db = await fetchDb();
         
         if (db.users.some(u => u.email.toLowerCase() === data.email.toLowerCase())) return "Email already exists.";
         if (db.users.some(u => u.phone === data.phone)) return "Phone number already exists.";
 
+        // Validate Referral Code
+        let validReferrerCode = undefined;
+        if (data.referralCode) {
+            const referrer = db.users.find(u => u.referralCode === data.referralCode.trim().toUpperCase());
+            if (referrer) {
+                validReferrerCode = referrer.referralCode;
+            }
+        }
+
+        // Generate New Unique Referral Code
+        const generatedCode = (data.name.substring(0, 3) + Math.random().toString(36).substring(2, 5)).toUpperCase();
+
         const newId = Date.now().toString();
-        const newUser = {
+        const newUser: UserProfile & {password: string} = {
             id: newId,
             name: data.name,
             email: data.email.toLowerCase(),
             phone: data.phone,
             password: data.password, // Stored for demo purposes
-            role: 'user' as const,
+            role: 'user',
             verified: false,
-            approvalStatus: 'pending' as const
+            approvalStatus: 'pending',
+            referralCode: generatedCode,
+            referredBy: validReferrerCode,
+            referralEarnings: 0,
+            hasListedFirstItem: false
         };
 
         db.users.push(newUser);
         await saveDb(db);
 
         const { password, ...safeUser } = newUser;
-        return safeUser as UserProfile;
+        return safeUser;
     } catch (e) {
         return "Registration Failed. Please try again.";
     }
@@ -288,6 +312,41 @@ export const getAssets = async (): Promise<Asset[]> => {
 export const addAsset = async (asset: Asset): Promise<void> => {
     const db = await fetchDb();
     db.assets.push(asset);
+
+    // --- REFERRAL REWARD LOGIC ---
+    if (asset.ownerId) {
+        const userIndex = db.users.findIndex(u => u.id === asset.ownerId);
+        if (userIndex >= 0) {
+            const user = db.users[userIndex];
+            
+            // If this is their FIRST item and they were referred
+            if (!user.hasListedFirstItem) {
+                user.hasListedFirstItem = true; // Mark as done so we don't pay twice
+                
+                if (user.referredBy) {
+                    const referrerIndex = db.users.findIndex(u => u.referralCode === user.referredBy);
+                    if (referrerIndex >= 0) {
+                        const referrer = db.users[referrerIndex];
+                        referrer.referralEarnings = (referrer.referralEarnings || 0) + 10; // Earn KES 10
+
+                        // Create Reward Record for Admin
+                        if (!db.referralRewards) db.referralRewards = [];
+                        db.referralRewards.push({
+                            id: Date.now().toString() + '_ref',
+                            referrerId: referrer.id,
+                            referrerName: referrer.name,
+                            referredUserId: user.id,
+                            referredUserName: user.name,
+                            amount: 10,
+                            status: 'pending',
+                            createdAt: new Date().toISOString()
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     await saveDb(db);
 };
 
@@ -343,7 +402,8 @@ export const createShopOrder = async (product: Product, buyer: UserProfile, deli
         depositHeld: false,
         ownerId: 'SYSTEM_SHOP',
         deliveryLocation: location,
-        deliveryNotes: 'Standard Shop Delivery'
+        deliveryNotes: 'Standard Shop Delivery',
+        transactionType: 'sale'
     };
 
     db.transactions.push(tx);
@@ -383,7 +443,44 @@ export const rentAsset = async (
             depositHeld: true,
             ownerId: assetData.ownerId,
             deliveryLocation: location,
-            deliveryNotes: 'Asset Rental Delivery'
+            deliveryNotes: 'Asset Rental Delivery',
+            transactionType: 'rent'
+        };
+
+        db.transactions.push(tx);
+        await saveDb(db);
+    }
+};
+
+export const purchaseAsset = async (
+    assetId: string, 
+    buyer: UserProfile, 
+    location: {lat: number, lng: number, accuracy: number}
+): Promise<void> => {
+    const db = await fetchDb();
+    const assetIndex = db.assets.findIndex(a => a.id === assetId);
+
+    if (assetIndex >= 0 && (db.assets[assetIndex].status === 'available' || db.assets[assetIndex].status === 'rented')) { // Allow buying even if currently rented if owner allows (logic simplification)
+        
+        // Mark Asset as Sold
+        db.assets[assetIndex].status = 'sold';
+        const assetData = db.assets[assetIndex];
+
+        const txId = Date.now().toString();
+        const tx: Transaction = {
+            id: txId,
+            assetId: assetData.id,
+            assetName: assetData.name,
+            renterId: buyer.id, // Buyer ID stored in renterId for schema consistency
+            renterName: buyer.name,
+            startDate: new Date().toISOString(),
+            totalCost: assetData.salePrice || 0,
+            status: 'pending_approval', // Needs logistic confirmation
+            depositHeld: false,
+            ownerId: assetData.ownerId,
+            deliveryLocation: location,
+            deliveryNotes: 'Asset Purchase Delivery',
+            transactionType: 'sale'
         };
 
         db.transactions.push(tx);
@@ -415,6 +512,22 @@ export const updateTransactionStatus = async (txId: string, status: Transaction[
 
 export const returnAsset = async (txId: string): Promise<void> => {
     await updateTransactionStatus(txId, 'returned');
+};
+
+// --- REFERRAL REWARDS ---
+
+export const getReferralRewards = async (): Promise<ReferralReward[]> => {
+    const db = await fetchDb();
+    return db.referralRewards || [];
+};
+
+export const markReferralPaid = async (rewardId: string) => {
+    const db = await fetchDb();
+    const index = db.referralRewards.findIndex(r => r.id === rewardId);
+    if (index >= 0) {
+        db.referralRewards[index].status = 'paid';
+        await saveDb(db);
+    }
 };
 
 // --- TICKETS ---
@@ -452,10 +565,18 @@ export const getSettings = async (): Promise<AppSettings> => {
     return db.settings || { orgName: 'Dual Power Women Hub', logoUrl: '' };
 };
 
-// --- MEDIA (Cloudinary) ---
+// --- MEDIA (Cloudinary + Base64 Fallback) ---
+
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = error => reject(error);
+  });
+};
 
 export const uploadMedia = async (file: File): Promise<string> => {
-  // Use the explicitly provided Cloudinary Cloud Name
   const cloudName = CLOUDINARY_CLOUD_NAME;
   const uploadPreset = CLOUDINARY_UPLOAD_PRESET;
 
@@ -468,12 +589,17 @@ export const uploadMedia = async (file: File): Promise<string> => {
       method: 'POST',
       body: formData,
     });
+    
+    if (!response.ok) {
+        throw new Error(`Upload Failed: ${response.statusText}`);
+    }
+
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
     return data.secure_url;
   } catch (error) {
-    console.error("Cloudinary upload failed:", error);
-    // Fallback for offline testing
-    return URL.createObjectURL(file);
+    console.warn("Cloudinary upload failed, using Base64 fallback (Admin/Storage persistence ensured):", error);
+    // Fallback to Base64 so image is actually stored in JSONBin, ensuring admins can see it.
+    return await fileToBase64(file);
   }
 };

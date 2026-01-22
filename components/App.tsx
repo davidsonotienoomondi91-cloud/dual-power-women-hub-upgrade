@@ -5,13 +5,14 @@ import WealthPortal from './WealthPortal';
 import LoginScreen from './LoginScreen';
 import AdminDashboard from './AdminDashboard';
 import { Segment, UserProfile, AppSettings } from '../types';
-import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope, LayoutDashboard, Upload, Unlock, HelpCircle, Plus, MessageSquare } from 'lucide-react';
-import { getSettings, getTransactions, getNurseMessages, getTickets, uploadMedia, updateUserProfile, addTicket } from '../services/storageService';
+import { Heart, Briefcase, ArrowRight, LogOut, User, X, ShieldCheck, Mail, Phone, FileText, Wallet, Activity, Stethoscope, LayoutDashboard, Upload, Unlock, HelpCircle, Plus, MessageSquare, Users, Copy } from 'lucide-react';
+import { getSettings, getTransactions, getNurseMessages, getTickets, uploadMedia, updateUserProfile, addTicket, getUserById } from '../services/storageService';
 import Button from './Button';
 
 const App: React.FC = () => {
   const [currentSegment, setCurrentSegment] = useState<Segment>(Segment.LOGIN);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
   
   // Admin Session State (For Impersonation)
   const [adminSession, setAdminSession] = useState<UserProfile | null>(null);
@@ -27,6 +28,37 @@ const App: React.FC = () => {
   const [newTicket, setNewTicket] = useState<{type: 'complaint' | 'help' | 'return', subject: string, message: string}>({
       type: 'help', subject: '', message: ''
   });
+
+  // --- SESSION RESTORATION ---
+  useEffect(() => {
+    const restoreSession = async () => {
+      const storedUserId = localStorage.getItem('dp_user_id');
+      if (storedUserId) {
+        const storedUser = await getUserById(storedUserId);
+        if (storedUser) {
+          // Re-apply admin overrides if it's the master email
+          if (storedUser.email && storedUser.email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com') {
+              storedUser.role = 'admin';
+              storedUser.verified = true;
+              storedUser.approvalStatus = 'approved';
+          }
+
+          setUser(storedUser);
+          
+          if (storedUser.role === 'admin') {
+             setCurrentSegment(Segment.LANDING);
+          } else if (storedUser.role === 'nurse') {
+             setCurrentSegment(Segment.HEALTH);
+          } else {
+             setCurrentSegment(Segment.LANDING);
+          }
+        }
+      }
+      setIsRestoringSession(false);
+    };
+
+    restoreSession();
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -88,12 +120,15 @@ const App: React.FC = () => {
   }, [user?.id]); // Only run when user ID changes (i.e., on login)
 
   const handleLogin = (loggedInUser: UserProfile) => {
-      // 1. Force Admin Role for the Owner - Add null check for email
+      // 1. Force Admin Role for the Owner
       if (loggedInUser.email && loggedInUser.email.trim().toLowerCase() === 'davidsonotienoomondi91@gmail.com') {
           loggedInUser.role = 'admin';
           loggedInUser.verified = true;
           loggedInUser.approvalStatus = 'approved';
       }
+
+      // 2. Persist Session
+      localStorage.setItem('dp_user_id', loggedInUser.id);
 
       setUser(loggedInUser);
       // Clear any previous admin session on new login
@@ -114,6 +149,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+      localStorage.removeItem('dp_user_id'); // Clear Session
       setUser(null);
       setAdminSession(null);
       setCurrentSegment(Segment.LOGIN);
@@ -183,6 +219,13 @@ const App: React.FC = () => {
       alert("Ticket Submitted Successfully.");
   };
 
+  const copyReferralCode = () => {
+      if (user?.referralCode) {
+          navigator.clipboard.writeText(user.referralCode);
+          alert("Referral Code Copied to Clipboard!");
+      }
+  };
+
   const ExitButton = () => (
     <button 
       onClick={() => setCurrentSegment(Segment.LANDING)}
@@ -207,11 +250,24 @@ const App: React.FC = () => {
 
   // --- RENDER LOGIC ---
 
+  // 1. Session Loading State
+  if (isRestoringSession) {
+      return (
+          <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-4">
+                  <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                  <div className="text-indigo-400 font-bold tracking-widest text-xs animate-pulse">RESTORING SECURE SESSION...</div>
+              </div>
+          </div>
+      );
+  }
+
+  // 2. Login Screen
   if (!user) {
       return <LoginScreen onLogin={handleLogin} logoUrl={settings.logoUrl} />;
   }
 
-  // STRICT ADMIN VIEW: If role is admin OR administrator, show Admin Dashboard.
+  // 3. Strict Admin Dashboard
   if ((user.role === 'admin' || user.role === 'administrator') && currentSegment === Segment.ADMIN) {
       return (
         <AdminDashboard 
@@ -223,7 +279,7 @@ const App: React.FC = () => {
       );
   }
 
-  // NURSE VIEW
+  // 4. Nurse View
   if (currentSegment === Segment.HEALTH) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -233,7 +289,7 @@ const App: React.FC = () => {
     );
   }
 
-  // WEALTH PORTAL
+  // 5. Wealth Portal
   if (currentSegment === Segment.WEALTH && user) {
     return (
       <div className="relative animate-in fade-in duration-300">
@@ -248,7 +304,7 @@ const App: React.FC = () => {
     );
   }
 
-  // USER LANDING PAGE (DEFAULT)
+  // 6. User Landing Page (Default)
   return (
     <div className="min-h-screen flex flex-col md:flex-row font-sans overflow-hidden relative">
       
@@ -256,7 +312,6 @@ const App: React.FC = () => {
 
       {/* --- FAILSAFE ADMIN BUTTON --- */}
       {/* This button ONLY appears for the owner email if they are on the landing page */}
-      {/* ADDED NULL CHECK FOR user.email */}
       {user.email && user.email.toLowerCase() === 'davidsonotienoomondi91@gmail.com' && (
           <button 
               onClick={() => setCurrentSegment(Segment.ADMIN)}
@@ -362,7 +417,55 @@ const App: React.FC = () => {
                               </div>
                           </div>
                       </section>
+
+                      {/* Section 2: Referral Center (NEW) */}
+                      <section className="bg-amber-50 p-5 rounded-xl border border-amber-100 relative overflow-hidden">
+                          <div className="absolute right-0 top-0 opacity-10 text-amber-500 transform translate-x-1/4 -translate-y-1/4">
+                              <Users size={120} />
+                          </div>
+                          <div className="relative z-10">
+                              <h3 className="text-sm font-bold text-amber-800 uppercase tracking-widest mb-4 flex items-center gap-2"><Users size={16}/> Referral Center</h3>
+                              <div className="flex flex-col md:flex-row gap-6">
+                                  <div className="bg-white p-4 rounded-xl shadow-sm border border-amber-200 flex-1">
+                                      <div className="text-xs text-slate-500 mb-1 font-bold uppercase">Your Unique Invite Code</div>
+                                      <div className="flex items-center gap-2">
+                                          <div className="text-2xl font-black text-slate-900 tracking-widest bg-slate-100 px-3 py-1 rounded-lg border border-slate-200 font-mono">
+                                              {user.referralCode || '----'}
+                                          </div>
+                                          <button onClick={copyReferralCode} className="p-2 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200" title="Copy Code">
+                                              <Copy size={20} />
+                                          </button>
+                                      </div>
+                                      <p className="text-xs text-slate-500 mt-2">Share this code with new users.</p>
+                                  </div>
+                                  <div className="bg-gradient-to-br from-amber-500 to-orange-600 p-4 rounded-xl shadow-lg text-white flex-1 flex flex-col justify-center">
+                                      <div className="text-xs font-bold uppercase opacity-80 mb-1">Total Referral Earnings</div>
+                                      <div className="text-3xl font-black">KES {(user.referralEarnings || 0).toLocaleString()}</div>
+                                      <div className="text-[10px] font-medium opacity-90 mt-1">Earn KES 10 when your invitee lists their first item!</div>
+                                  </div>
+                              </div>
+                          </div>
+                      </section>
                       
+                      {/* Section 3: Wealth Record */}
+                      <section className="bg-indigo-50 p-5 rounded-xl border border-indigo-100">
+                          <h3 className="text-sm font-bold text-indigo-800 uppercase tracking-widest mb-4 flex items-center gap-2"><Wallet size={16}/> Wealth & Business Record</h3>
+                          <div className="grid grid-cols-3 gap-4 text-center">
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                  <div className="text-2xl font-black text-indigo-900">KES {stats.earnings.toLocaleString()}</div>
+                                  <div className="text-[10px] font-bold text-indigo-400 uppercase">Total Earnings</div>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                  <div className="text-2xl font-black text-slate-700">KES {stats.spending.toLocaleString()}</div>
+                                  <div className="text-[10px] font-bold text-slate-400 uppercase">Total Spent</div>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                  <div className="text-2xl font-black text-amber-600">{stats.activeRentals}</div>
+                                  <div className="text-[10px] font-bold text-amber-400 uppercase">Active Rentals</div>
+                              </div>
+                          </div>
+                      </section>
+
                       {/* Section 4: Support & Tickets */}
                       <section className="bg-blue-50 p-5 rounded-xl border border-blue-100">
                            <div className="flex justify-between items-center mb-4">
@@ -416,26 +519,7 @@ const App: React.FC = () => {
                            )}
                       </section>
 
-                      {/* Section 2: Wealth Record */}
-                      <section className="bg-indigo-50 p-5 rounded-xl border border-indigo-100">
-                          <h3 className="text-sm font-bold text-indigo-800 uppercase tracking-widest mb-4 flex items-center gap-2"><Wallet size={16}/> Wealth & Business Record</h3>
-                          <div className="grid grid-cols-3 gap-4 text-center">
-                              <div className="bg-white p-3 rounded-lg shadow-sm">
-                                  <div className="text-2xl font-black text-indigo-900">KES {stats.earnings.toLocaleString()}</div>
-                                  <div className="text-[10px] font-bold text-indigo-400 uppercase">Total Earnings</div>
-                              </div>
-                              <div className="bg-white p-3 rounded-lg shadow-sm">
-                                  <div className="text-2xl font-black text-slate-700">KES {stats.spending.toLocaleString()}</div>
-                                  <div className="text-[10px] font-bold text-slate-400 uppercase">Total Spent</div>
-                              </div>
-                              <div className="bg-white p-3 rounded-lg shadow-sm">
-                                  <div className="text-2xl font-black text-amber-600">{stats.activeRentals}</div>
-                                  <div className="text-[10px] font-bold text-amber-400 uppercase">Active Rentals</div>
-                              </div>
-                          </div>
-                      </section>
-
-                      {/* Section 3: Health Status */}
+                      {/* Section 5: Health Status */}
                       <section className="bg-rose-50 p-5 rounded-xl border border-rose-100">
                           <h3 className="text-sm font-bold text-rose-800 uppercase tracking-widest mb-4 flex items-center gap-2"><Activity size={16}/> Health & Privacy Status</h3>
                           <div className="flex items-center gap-4 bg-white p-4 rounded-lg border border-rose-100 shadow-sm">

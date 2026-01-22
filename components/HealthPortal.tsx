@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle, CheckCircle, MapPin, Calendar, Clock } from 'lucide-react';
+import { ShoppingBag, ShieldCheck, Send, User, Sparkles, Stethoscope, HeartPulse, ChevronRight, Lock, Trash2, Save, FileText, Users, ExternalLink, LogOut, ArrowLeftCircle, CheckCircle, MapPin, Calendar, Clock, AlertTriangle } from 'lucide-react';
 import { ChatMessage, Product, UserProfile } from '../types';
 import { getHealthAdvice } from '../services/geminiService';
 import { saveNurseMessage, deleteNurseMessage, getNurseMessages, getProducts, getAllUsers, createShopOrder } from '../services/storageService';
@@ -20,6 +20,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isEscalated, setIsEscalated] = useState(false);
   
   // Nurse Specific State
   const [savedMessages, setSavedMessages] = useState<ChatMessage[]>([]);
@@ -53,12 +54,13 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
   const switchTab = (tab: 'ai' | 'nurse' | 'shop') => {
     setActiveTab(tab);
     if (tab === 'nurse' && !isNurseUser) {
+        // If manually switching to nurse tab, ensure nurse bot greeting is present
         const hasNurseMsg = messages.some(m => m.role === 'nurse');
         if (!hasNurseMsg) {
              setMessages(prev => [...prev, {
                 id: Date.now().toString(),
                 role: 'nurse',
-                text: "Virtual Private Nurse connected. I am here for your medical concerns. Please describe your symptoms.",
+                text: "Virtual Private Nurse connected. I am here for your medical concerns. Please describe your symptoms clearly.",
                 timestamp: new Date()
              }]);
         }
@@ -82,16 +84,30 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
     try {
       const isNurseMode = activeTab === 'nurse';
       // Note: We use 'messages' from closure which doesn't have the new userMsg yet.
-      // This is correct as we append userMsg manually in the service call if needed, 
-      // but getHealthAdvice expects history + current message separately.
       const response = await getHealthAdvice(
         messages.map(m => ({ role: m.role, text: m.text })),
         userMsg.text,
         isNurseMode
       );
 
-      if (response.isEscalated && activeTab !== 'nurse') {
-        setActiveTab('nurse');
+      // STRICT ESCALATION HANDLING
+      if (response.isEscalated) {
+          setIsEscalated(true);
+          if (activeTab !== 'nurse') {
+              setActiveTab('nurse');
+          }
+          
+          // AUTO-SAVE FOR REAL NURSE
+          // We save the user's triggering message so the nurse knows WHAT caused the alarm
+          const emergencyLog: ChatMessage = {
+              id: Date.now().toString() + '_alert',
+              role: 'user', // Attributed to user for clarity in Nurse Log
+              text: `[EMERGENCY TRIGGER] ${userMsg.text} \n\n[AI RESPONSE] ${response.text}`,
+              timestamp: new Date(),
+              isEscalated: true,
+              isSaved: true
+          };
+          saveNurseMessage(emergencyLog).catch(console.error);
       }
 
       setMessages(prev => [...prev, {
@@ -108,7 +124,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
       setMessages(prev => [...prev, {
           id: Date.now().toString(),
           role: 'model',
-          text: "I'm having trouble connecting right now. Please try again.",
+          text: "I'm having trouble connecting right now. If this is an emergency, please call 112 immediately.",
           timestamp: new Date()
       }]);
     }
@@ -218,11 +234,11 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
                         <div className="space-y-2 max-h-[300px] md:max-h-[500px] overflow-y-auto pr-2">
                             {patients.filter(p => p.role === 'user').map(patient => (
                                 <div key={patient.id} className="p-3 border border-slate-100 rounded-lg bg-slate-50 flex items-center justify-between group">
-                                    <div className="overflow-hidden">
+                                    <div className="overflow-hidden min-w-0">
                                         <div className="font-bold text-sm text-slate-900 truncate">{patient.name}</div>
                                         <div className="text-xs text-slate-500 truncate">{patient.email}</div>
                                     </div>
-                                    <div className="text-[10px] text-purple-400 font-mono">
+                                    <div className="text-[10px] text-purple-400 font-mono flex-shrink-0 ml-2">
                                         {patient.verified ? 'Verified' : 'Unverified'}
                                     </div>
                                 </div>
@@ -284,7 +300,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
                                             </span>
                                             <span className="text-[10px] text-slate-400">{new Date(msg.timestamp).toLocaleDateString()}</span>
                                         </div>
-                                        <p className="text-sm text-slate-700 mb-3 line-clamp-3">{msg.text}</p>
+                                        <p className="text-sm text-slate-700 mb-3 line-clamp-3 whitespace-pre-wrap">{msg.text}</p>
                                         <div className="flex justify-end">
                                             <button 
                                                 onClick={() => handleDeleteSavedMessage(msg.id)}
@@ -364,7 +380,7 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
 
                   <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
                       <button onClick={() => {setSelectedProduct(null); setDeliveryCoords(null); setOrderDate('');}} className="px-4 py-3 rounded-lg font-bold text-slate-500 hover:bg-slate-100 transition-colors">Cancel</button>
-                      <Button variant="health" onClick={handleShopOrder} disabled={!deliveryCoords || !orderDate}>Confirm Order</Button>
+                      <Button variant="wealth" onClick={handleShopOrder} disabled={!deliveryCoords || !orderDate}>Confirm Order</Button>
                   </div>
               </div>
           </div>
@@ -434,14 +450,18 @@ const HealthPortal: React.FC<HealthPortalProps> = ({ user, onSwitchToUser }) => 
           <div className="space-y-6 pb-24">
             
             {activeTab === 'nurse' && (
-                <div className="mx-auto max-w-lg bg-purple-50 border border-purple-100 p-4 rounded-xl flex gap-4 items-center mb-8">
-                    <div className="bg-purple-200 p-3 rounded-full text-purple-700">
-                        <HeartPulse size={24} />
+                <div className={`mx-auto max-w-lg border p-4 rounded-xl flex gap-4 items-center mb-8 ${isEscalated ? 'bg-red-50 border-red-200' : 'bg-purple-50 border-purple-100'}`}>
+                    <div className={`p-3 rounded-full ${isEscalated ? 'bg-red-100 text-red-600' : 'bg-purple-200 text-purple-700'}`}>
+                        {isEscalated ? <AlertTriangle size={24}/> : <HeartPulse size={24} />}
                     </div>
                     <div>
-                        <h3 className="font-bold text-purple-900 text-sm">Professional Triage Mode</h3>
-                        <p className="text-purple-700/80 text-xs mt-1 leading-relaxed">
-                            You are speaking with a Virtual Nurse Agent. This data is processed securely for medical context.
+                        <h3 className={`font-bold text-sm ${isEscalated ? 'text-red-900' : 'text-purple-900'}`}>
+                            {isEscalated ? 'EMERGENCY PROTOCOL ACTIVE' : 'Professional Triage Mode'}
+                        </h3>
+                        <p className={`text-xs mt-1 leading-relaxed ${isEscalated ? 'text-red-800' : 'text-purple-700/80'}`}>
+                            {isEscalated 
+                                ? 'Your chat has been flagged for severity. A record has been securely sent to our medical desk. Please ensure you are safe.' 
+                                : 'You are speaking with a Virtual Nurse Agent. This data is processed securely for medical context.'}
                         </p>
                     </div>
                 </div>

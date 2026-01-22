@@ -3,7 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { UserProfile } from '../types';
 import { loginUser, registerUser, resetUserPassword } from '../services/storageService';
 import Button from './Button';
-import { Lock, User, ShieldAlert, Heart, Briefcase, Phone, Mail, ArrowLeft, CheckCircle, Info, Eye, EyeOff, BookOpen, X, FileText, Scale } from 'lucide-react';
+import { Lock, User, ShieldAlert, Heart, Briefcase, Phone, Mail, ArrowLeft, CheckCircle, Info, Eye, EyeOff, BookOpen, X, FileText, Scale, Users } from 'lucide-react';
 
 interface LoginScreenProps {
   onLogin: (user: UserProfile) => void;
@@ -34,6 +34,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
     phone: '',
     password: '',
     confirmPassword: '',
+    referralCode: '',
     acceptedTerms: false
   });
 
@@ -165,7 +166,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
-        password: formData.password
+        password: formData.password,
+        referralCode: formData.referralCode // Pass optional referral code
     });
 
     if (typeof result === 'string') {
@@ -474,6 +476,24 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, logoUrl }) => {
                                 />
                             </div>
                         </div>
+                        
+                        {/* Referral Code */}
+                        <div>
+                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Referral Code (Optional)</label>
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    name="referral"
+                                    value={formData.referralCode}
+                                    onChange={(e) => handleChange('referralCode', e.target.value.toUpperCase())}
+                                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none pl-10 text-slate-900 font-bold tracking-widest"
+                                    placeholder="CODE123"
+                                    maxLength={10}
+                                />
+                                <Users className="absolute left-3 top-3.5 text-slate-400" size={16}/>
+                            </div>
+                        </div>
+
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Password</label>
